@@ -258,6 +258,64 @@ Containers:
   `run analytics verify-marts --manifest /runs/demo.json`. The stack stays up for exploration;
   `make dashboard` adds the UI and `make down` removes everything with its volumes.
 
+## SQL Server path (Phase 5)
+
+Run with the compose profile `mssql` (`make mssql-demo`), instead of the Debezium path and never
+next to it: both bind host ports and the Spark UI, and both write the `demo_runs` volume.
+
+Flow: `mssql-init` (sqlcmd, `mssql/init/01_setup.sql`) -> `mssql-consumer`
+(`cdc-demo consume-mssql`): `ensure_snapshot` (one `mssql_cdc_snapshot` read at LSN `L`, written
+as `r` events with `ingest_batch_id = -1`), then `readStream.format("mssql_cdc")` with
+`startingLsn = L`, `foreachBatch(MssqlBatchWriter)`. Lake root `s3a://cdc-demo/mssql`, same
+table paths and schemas as the Debezium path; consumer app id `orders-mssql-consumer-v1`.
+`mssql-job` runs the one-shot commands on that lake.
+
+Source table `dbo.orders` (SQL Server): `id BIGINT IDENTITY PK, customer_id INT, status
+VARCHAR(20) CHECK, amount DECIMAL(12,2) CHECK > 0, created_at DATETIME2(6), updated_at
+DATETIME2(6)`; no trigger (the mutator sets `updated_at` with `SYSUTCDATETIME()`). CDC enabled
+with capture instance `dbo_orders`, no gating role; 500 rows seeded by arithmetic before CDC is
+enabled. Logins: `cdc_owner` (datareader, datawriter) and `cdc_reader` (`SELECT` on `dbo.orders`
+and `cdc.dbo_orders_CT`).
+
+Mapping of the library's rows (`_capture_instance`, `_start_lsn`, `_seqval`, `_operation`,
+`_command_id`, `_commit_ts`, then `id, customer_id, status, amount, created_at, updated_at`)
+into the CDC log (`mssql/mapping.py`):
+
+| CDC log column | From |
+| --- | --- |
+| `op` | `_operation`: 0 `r`, 2 `c`, 4 `u`, 1 `d`; the operation 3 row is consumed by its operation 4 row |
+| `order_id` | `id` |
+| `customer_id`, `status`, `amount`, `created_at`, `updated_at` | the row's columns (naive UTC timestamps read as UTC); NULL on `d` |
+| `before_status`, `before_amount` | `u`: the operation 3 row with the same `(_start_lsn, _seqval, id)`; `d`: the row's own values; otherwise NULL |
+| `source_ts_ms`, `kafka_timestamp`, `_partition_date` | `_commit_ts` (UTC); `_partition_date` falls back to the ingest date |
+| `source_lsn` | `_start_lsn` packed as `vlf << 40 \| block << 16 \| slot` (`mssql/lsn.py`) |
+| `source_tx_id` | NULL |
+| `kafka_topic`, `kafka_partition` | `mssql.dbo.orders`, 0 |
+| `kafka_offset`, `event_id` | `last max_offset in ingest_runs (-1 if none) + n`, n counting emitted rows in library order `(_start_lsn, _command_id, _seqval, _operation, id)`; `event_id = mssql.dbo.orders-0-<offset>` |
+| `ingest_batch_id` | Spark batch id; -1 for the snapshot |
+
+Rejects (`raw_value` is `to_json` of the source row): `null_order_id`, `invalid_op`,
+`unpaired_update` (an operation 4 without its 3, or a 3 without its 4), `lsn_out_of_range`
+(`vlf >= 2^23` or `block >= 2^24`). A source schema that differs from the expected columns
+raises instead of mapping. Batches with no rows write nothing, not even a run row.
+
+Environment (defaults in `.env.example`; passwords are `SecretStr`, never in the connection
+string): `SQLSERVER_HOST`, `SQLSERVER_PORT`, `SQLSERVER_DB`, `SQLSERVER_USER`,
+`SQLSERVER_PASSWORD`, `SQLSERVER_CDC_USER`, `SQLSERVER_CDC_PASSWORD`, `SQLSERVER_CAPTURE_INSTANCE`
+(default `dbo_orders`), `MSSQL_SA_PASSWORD` (compose only), `MSSQL_ACCEPT_EULA` (no default).
+
+CLI: `consume-mssql [--available-now]`, `mutate --target postgres|mssql`,
+`verify --source postgres|mssql` (the source row count is `postgres_rows` or `sqlserver_rows`),
+`verify-current --source postgres|mssql`, `lag-report` (batch `finished_at` minus `source_ts_ms`
+for `c`, `u` and `d` events: p50, p95, max).
+
+Compose (profile `mssql`): `mssql` (2 GB, server memory 1536 MB, Agent on, `127.0.0.1:${SQLSERVER_PORT}`),
+`mssql-init` (256 MB, one-shot), `mssql-consumer` (2560 MB), `mssql-job` (2560 MB). The Spark image
+installs the `mssql` extra and `libltdl7 libkrb5-3 libgssapi-krb5-2`.
+
+Snapshot recovery: if the CDC log already has `r` rows, `L` is the unpacked maximum `source_lsn`
+and a missing `ingest_runs` row for batch -1 is written again; the snapshot is not read twice.
+
 ## Idempotency rules
 
 - Connector registration is `PUT /connectors/orders-connector/config` (create or update).
@@ -296,8 +354,10 @@ Each phase is one PR, stacked on the previous branch.
    extended with `build-marts` and `verify-marts` (10 steps), consumer creating its tables at
    startup.
 5. **Two ways to do CDC** (`feat/mssql-cdc-comparison`): SQL Server CDC read directly by Spark
-   with the `mssql-cdc-pyspark` library into the same CDC log contract, and a comparison section
-   (operational cost, latency, ordering, deletes, schema changes).
+   with the `mssql-cdc-pyspark` library into the same CDC log contract under a separate lake
+   root, `make mssql-demo` (11 steps), `make lag`, `make stats`, and a comparison section in the
+   README (operational cost, latency, ordering, deletes, schema changes; the numbers are
+   measured and dated).
 
 ## Verification per phase
 

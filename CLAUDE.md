@@ -16,6 +16,9 @@ Lake on S3-compatible storage. Public portfolio repo; all data is synthetic.
 - `make proto`: recompile `src/cdc_demo/proto/orders_value.desc` from the `.proto` (dev group:
   `grpcio-tools`).
 - `make merge`: run `cdc-demo merge` in the `spark-job` container (stack up).
+- `make mssql-demo`: the SQL Server path end to end (`MSSQL_ACCEPT_EULA=Y` required; run it
+  instead of `make demo`, never next to it). `make lag` and `make stats` measure the stack
+  that is up.
 - `make marts`: build the DuckDB marts with dbt in the `analytics` container (stack up).
 - `make dashboard`: start the Streamlit dashboard (http://localhost:8501).
 - `make demo`: fresh stack, seeded workload, `cdc-demo verify`, two merges, `verify-current`,
@@ -37,6 +40,9 @@ Lake on S3-compatible storage. Public portfolio repo; all data is synthetic.
   (`check-schema`), `verify.py`, `verify_current.py` (`verify-current`), `marts.py`
   (`build-marts`), `verify_marts.py` (`verify-marts`), `spark/tables.py` (table creation
   shared by the consumer and the merger).
+- `mssql/init/01_setup.sql`: SQL Server database, table, seed, CDC and logins (profile
+  `mssql`). `src/cdc_demo/mssql/`: `lsn.py`, `mapping.py`, `writer.py`, `job.py`,
+  `source_db.py`; `mutator/mssql_db.py`; `lag.py` (`lag-report`).
 - `dbt/`: dbt-duckdb project `cdc_demo` (staging views, marts with enforced contracts, tests).
   `dashboard/app.py`: Streamlit app over the DuckDB file.
 - `docs/PLAN.md`: layers, contracts, runtime contract, phases. `docs/DECISIONS.md`: decision log.
@@ -62,6 +68,11 @@ Lake on S3-compatible storage. Public portfolio repo; all data is synthetic.
   dbt or streamlit at module level: the mutator image has none of them.
 - dbt-common needs `protobuf<7`, so the dev group caps `protobuf` below 7 and `grpcio-tools`
   below 1.83; after a bump, rerun the descriptor test and `make proto` if it drifts.
+- The SQL Server path writes only under `LAKE_ROOT=s3a://cdc-demo/mssql`, never under the
+  Debezium root: ids and LSNs of the two sources are not comparable. Never run both stacks at
+  once. `cdc_demo.cli` never imports `mssql_python` or `mssql_cdc` at module level (the
+  mutator image has neither); `mssql_python` is imported inside the functions that connect.
+  `MSSQL_ACCEPT_EULA` has no default anywhere except the CI workflow, where the owner accepts.
 - The spark extra pins `pyspark` and `delta-spark` exactly; the Kafka, spark-protobuf and
   hadoop-aws package versions are derived from the installed pyspark, so bump them together.
 - Env var names, CLI options and table paths are the contract in `docs/PLAN.md`; change the

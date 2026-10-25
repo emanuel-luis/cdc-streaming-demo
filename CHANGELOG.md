@@ -43,6 +43,13 @@ All notable changes to this project are documented here. The format follows
   `make marts`; `make demo` now has 10 steps and ends with `build-marts` and `verify-marts`.
 - `dbt parse` in `make lint` and in the CI lint job; Dependabot ignores for the dbt and DuckDB
   minor versions and for the protobuf and grpcio-tools lines.
+- Phase 5, "Two ways to do CDC": SQL Server CDC read by Spark with `mssql-cdc-pyspark`
+  (`mssql` extra, pinned `1.0.0rc1`), mapped into the same CDC log contract under
+  `s3a://cdc-demo/mssql`. `cdc-demo consume-mssql`, `mutate --target mssql`,
+  `verify` and `verify-current` with `--source mssql`, `lag-report`.
+- Compose profile `mssql` (SQL Server 2022, setup job, consumer, job), `mssql/init/01_setup.sql`,
+  `make mssql-demo`, `make lag`, `make stats`, the `mssql` workflow (manual and weekly) and a
+  README comparison with the Debezium path. `MSSQL_ACCEPT_EULA` has no default.
 
 ### Changed
 
@@ -55,6 +62,8 @@ All notable changes to this project are documented here. The format follows
   `cdc_demo.spark.tables`.
 - Dev group: `grpcio-tools>=1.80,<1.83` and `protobuf>=6.33.5,<7` (dbt-common needs
   protobuf below 7).
+- `make down` also removes the `mssql` profile. The Spark image installs the `mssql` extra and
+  three system libraries; `ingest.writer.append_delta` is now a module-level function.
 - Kafka UI is configured with the registry; the stack's memory budget includes Schema Registry.
 
 ### Removed

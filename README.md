@@ -24,6 +24,9 @@
 - An analytics layer without a warehouse server: dbt-duckdb reads the Delta tables in place
   (DuckDB's `delta` extension over S3) and builds staging views and four marts with enforced
   contracts and tests; a Streamlit dashboard reads the resulting DuckDB file.
+- A second way to capture changes: SQL Server CDC read directly by Spark with
+  [mssql-cdc-pyspark](https://github.com/emanuel-luis/mssql-cdc-pyspark), landing in the same CDC
+  log contract, compared with the Debezium path (see "Two ways to do CDC").
 - An end-to-end check: `make demo` mutates the source with a seeded workload, asserts the
   lake against the mutator's manifest and against Postgres, then asserts the marts against
   the same manifest.
@@ -180,6 +183,8 @@ Every long-running service has a memory limit in `compose.yaml`, sized for a 16 
 | consumer (Spark driver 1 GB) | 2.5 GB | 2.3 GB |
 | analytics (short-lived, DuckDB capped at 512 MB) | 1 GB | 200 MB |
 | dashboard (on demand) | 512 MB | 52 MB |
+| mssql (SQL Server path only, server memory capped at 1536 MB) | 2 GB | [to be measured] |
+| mssql-consumer (SQL Server path only, Spark driver 1 GB) | 2.5 GB | [to be measured] |
 
 `verify`, `merge` and `verify-current` run in short-lived `spark-job` containers with the
 consumer's limit, 2.5 GB (Spark driver 1 GB). Both Spark containers grow toward their limit:
@@ -187,6 +192,88 @@ the same `spark-job` runs peaked at 2.0 GB under an earlier 2 GB limit and at 2.
 2.5 GB, and none was killed, which points to page cache the kernel reclaims rather than heap.
 The dashboard figure comes from health probes, with no browser session open. With the
 consumer and a `spark-job` running, the whole stack used at most about 6.2 GB in one sample.
+
+## Two ways to do CDC
+
+The same `orders` table, the same seeded workload and the same CDC log contract, reached two
+ways. The Debezium path above reads the Postgres WAL and goes through Kafka. The SQL Server
+path reads SQL Server's own change tables directly from Spark with
+[mssql-cdc-pyspark](https://github.com/emanuel-luis/mssql-cdc-pyspark), with no Kafka, no
+Schema Registry and no Connect. Both land in the same Delta tables with the same schemas; the
+SQL Server path writes under its own lake root, `s3a://cdc-demo/mssql`, because order ids 1 to
+500 exist in both databases and their LSNs cannot be compared. The merger, dbt and the
+verifiers run unchanged on either root.
+
+```bash
+MSSQL_ACCEPT_EULA=Y make mssql-demo   # instead of make demo, never next to it
+make lag                              # p50, p95 and max lag of the stack that is up
+make stats                            # memory of every running container
+make down
+```
+
+Running this path means accepting Microsoft's
+[SQL Server EULA](https://go.microsoft.com/fwlink/?linkid=857698): the compose file has no
+default for `MSSQL_ACCEPT_EULA` and `make mssql-demo` refuses to start without `Y`. The image is
+`linux/amd64` only (Apple Silicon needs emulation) and is not part of the PR checks; the
+`mssql` workflow runs it on demand and weekly.
+
+How the SQL Server path works:
+
+1. `mssql-init` creates the database, `dbo.orders` (same columns and checks as Postgres), 500
+   seeded rows, enables CDC on the table and creates two logins: an owner for the mutator and a
+   reader with `SELECT` on the table and on `cdc.dbo_orders_CT` only.
+2. `mssql-consumer` takes one snapshot of the table at a recorded LSN `L`
+   (`format("mssql_cdc_snapshot")`) and writes it as `op = r` events, then streams the change
+   table from `L` (`format("mssql_cdc")`, `startingLsn = L`). A restart finds `L` again in the
+   log and resumes from the checkpoint.
+3. Every micro-batch is mapped into the CDC log contract: an update is two source rows (before
+   and after) and becomes one `u` event; the SQL Server LSN is packed into the `source_lsn`
+   BIGINT; `kafka_offset` is a dense counter in the library's order. The mapping table is in
+   [docs/PLAN.md](docs/PLAN.md), the reasons in decisions 45 to 55.
+
+### What differs
+
+| | Debezium path | SQL Server path (mssql-cdc-pyspark) |
+| --- | --- | --- |
+| Long-running services | postgres, kafka, schema-registry, connect, s3, consumer | mssql, s3, consumer |
+| Memory limits in `compose.yaml` (long-running) | 6 GB in total (postgres 256 MB, kafka 1 GB, schema-registry 512 MB, connect 1.25 GB, s3 512 MB, consumer 2.5 GB) | 5 GB in total (mssql 2 GB, s3 512 MB, consumer 2.5 GB) |
+| Measured peak memory | [to be measured] (`make stats` during `make demo`) | [to be measured] (`make stats` during `make mssql-demo`) |
+| Where the changes are read | the Postgres WAL, through a replication slot | the change table `cdc.dbo_orders_CT`, filled by the CDC capture job inside the source database |
+| Replay buffer | the Kafka topic | the change table, trimmed by the CDC cleanup job |
+| Order of events | `(source_lsn, kafka_offset)`, Postgres LSN and the Kafka offset | `(_start_lsn, _command_id, _seqval, _operation)` from the library, turned into a dense `kafka_offset`; `source_lsn` is the packed commit LSN |
+| Update before image | needs `REPLICA IDENTITY FULL` (decision 9) | the before row (operation 3) is part of the change table; the mapping pairs it with the after row (operation 4) |
+| Delete | a delete event, then a tombstone the consumer skips and counts | a delete row only, so `tombstones` is always 0; its values become the before image |
+| Initial snapshot | Debezium's consistent snapshot, as `r` events through Kafka | `mssql_cdc_snapshot` at a recorded LSN, read under READ COMMITTED, written once as `r` events |
+| Schema change | the Protobuf contract is checked in and `check-schema` fails on drift | the change table keeps its captured columns; the mapping fails loudly when the source columns differ from the expected ones; a new capture instance is the library's procedure ([schema changes guide](https://emanuel-luis.github.io/mssql-cdc-pyspark/guides/schema-changes/)) |
+| Commit to lake lag (p50 / p95 / max) | [to be measured] (`make lag` after `make demo`) | [to be measured] (`make lag` after `make mssql-demo`) |
+| Platform and license | `make demo` needs no EULA acceptance | SQL Server Developer EULA, `linux/amd64` image |
+
+Notes on the table:
+
+- Both paths write to Delta with the same mechanism: `txnAppId` and `txnVersion=batch_id` on
+  every write, so a replayed batch is skipped. The offsets of the SQL Server path stay dense
+  across batches because each batch starts after the highest `max_offset` in `ingest_runs`,
+  which is written last.
+- Ordering inside one SQL Server transaction follows the command id and the sequence value
+  of the change table, as the library documents
+  ([ordering changes](https://emanuel-luis.github.io/mssql-cdc-pyspark/reference/output-schema/));
+  a test with two updates of one row in one transaction checks that the merged row is the
+  last one.
+- Retention is a real difference in kind. Postgres keeps WAL for a replication slot until the
+  slot's consumer confirms it
+  ([logical decoding](https://www.postgresql.org/docs/current/logicaldecoding-explanation.html)),
+  so a stopped connector grows the disk. SQL Server's cleanup job deletes change rows after its
+  retention period (three days by default, per the library's
+  [bootstrap guide](https://emanuel-luis.github.io/mssql-cdc-pyspark/guides/bootstrap/)), so a
+  consumer that stays stopped longer loses changes and the library fails or re-snapshots
+  ([data loss](https://emanuel-luis.github.io/mssql-cdc-pyspark/guides/data-loss/)).
+- Capture runs inside the source database. SQL Server CDC needs the Agent and writes change
+  tables next to the data
+  ([about change data capture](https://learn.microsoft.com/sql/relational-databases/track-changes/about-change-data-capture-sql-server)),
+  which is why the demo container sets `MSSQL_AGENT_ENABLED`. Debezium adds a slot and a
+  publication to Postgres instead.
+- The numbers marked `[to be measured]` come from one run of the commands in their cells on
+  one laptop; they will be filled in with the date of the run.
 
 ## Design notes
 
@@ -248,9 +335,11 @@ plan is in [docs/PLAN.md](docs/PLAN.md).
 compose.yaml              the whole stack (project name cdc-streaming-demo)
 docker/                   mutator, Spark and analytics images (jars baked at build time), Connect image
 postgres/initdb/          schema, seeded data, replication role, publication
+mssql/init/               SQL Server setup: table, seed, CDC, logins (profile mssql)
 debezium/                 connector configuration
 scripts/                  connector registration, bucket creation, demo orchestration
-src/cdc_demo/             the cdc-demo CLI: mutator, Spark ingest, merge, marts, verify, check-schema
+src/cdc_demo/             the cdc-demo CLI: mutator, Spark ingest, merge, marts, verify, check-schema,
+                          mssql (SQL Server path), lag
 dbt/                      dbt-duckdb project: sources, staging views, marts, tests
 dashboard/                Streamlit app over the DuckDB marts
 src/cdc_demo/proto/       the Protobuf contract: .proto and compiled descriptor set
@@ -274,7 +363,7 @@ make test-spark   # Spark tests (Linux, macOS, WSL or CI; needs Java 17)
 - [x] Protobuf on the wire with Confluent Schema Registry and a schema contract test
 - [x] Current-state table: incremental MERGE from the CDC log with an offset watermark
 - [x] dbt (DuckDB) staging and marts, and a Streamlit dashboard
-- [ ] Two ways to do CDC: SQL Server CDC read directly by Spark with
+- [x] Two ways to do CDC: SQL Server CDC read directly by Spark with
       [mssql-cdc-pyspark](https://github.com/emanuel-luis/mssql-cdc-pyspark), compared with
       the Debezium path
 
