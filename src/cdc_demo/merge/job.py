@@ -68,7 +68,19 @@ def create_tables(spark: SparkSession, lake: LakeSettings) -> None:
 
 
 def _create(spark: SparkSession, path: str, schema: StructType) -> None:
-    DeltaTable.createIfNotExists(spark).location(path).addColumns(schema).execute()
+    builder = DeltaTable.createIfNotExists(spark).location(_qualified_local(path))
+    builder.addColumns(schema).execute()
+
+
+def _qualified_local(path: str) -> str:
+    """`file:///x` as Hadoop qualifies it (`file:/x`).
+
+    A path-based CREATE TABLE fails with DELTA_AMBIGUOUS_PATHS_IN_CREATE_TABLE unless the
+    qualified location ends with the path as given, and `file:/x` does not end with `file:///x`.
+    `s3a://` and plain paths already qualify to a string that ends with themselves.
+    """
+    prefix = "file:///"
+    return "file:/" + path.removeprefix(prefix) if path.startswith(prefix) else path
 
 
 def _read_watermark(spark: SparkSession, lake: LakeSettings) -> Offsets:
