@@ -4,6 +4,7 @@ Candidates are fetched ORDER BY id and picked in Python with the seeded RNG, so 
 over the same data makes the same changes.
 """
 
+import contextlib
 import random
 from collections.abc import Sequence
 from typing import Any
@@ -74,16 +75,38 @@ def delete_order(cur: Cursor, rng: random.Random) -> int | None:
     return picked[0]
 
 
+class CommitOutcomeUnknownError(Exception):
+    """The connection failed during COMMIT: the change may or may not have been applied."""
+
+
 def apply_op(
     conn: psycopg.Connection[Any], op: Op, rng: random.Random, cancel_probability: float
 ) -> int | None:
-    """Run one mutation in its own transaction. Returns the order id, None when skipped."""
-    with conn.transaction(), conn.cursor() as cur:
-        if op == "c":
-            return insert_order(cur, rng)
-        if op == "u":
-            return update_order(cur, rng, cancel_probability)
-        return delete_order(cur, rng)
+    """Run one mutation in its own transaction. Returns the order id, None when skipped.
+
+    Expects a connection with autocommit off. An error before COMMIT leaves nothing applied
+    (the server rolls back), so the caller may retry it; an error during COMMIT raises
+    CommitOutcomeUnknownError, because retrying then could apply the change twice.
+    """
+    result: int | None
+    try:
+        with conn.cursor() as cur:
+            if op == "c":
+                result = insert_order(cur, rng)
+            elif op == "u":
+                result = update_order(cur, rng, cancel_probability)
+            else:
+                result = delete_order(cur, rng)
+    except BaseException:
+        # On a dead connection the rollback fails too; the server discards the transaction.
+        with contextlib.suppress(psycopg.Error):
+            conn.rollback()
+        raise
+    try:
+        conn.commit()
+    except psycopg.OperationalError as exc:
+        raise CommitOutcomeUnknownError(f"connection lost while committing op {op!r}") from exc
+    return result
 
 
 def count_orders(conn: psycopg.Connection[Any]) -> int:

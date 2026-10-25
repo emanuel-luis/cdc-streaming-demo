@@ -3,7 +3,7 @@ from typing import Any
 import psycopg
 import pytest
 
-from cdc_demo.mutator import runner
+from cdc_demo.mutator import db, runner
 from cdc_demo.mutator.model import Manifest
 from cdc_demo.settings import MutatorSettings, PostgresSettings
 
@@ -53,6 +53,52 @@ def test_retries_operational_error_with_new_connection(monkeypatch: pytest.Monke
     m = run(monkeypatch, apply, connects, count=1, seed=1)
     assert len(connects) == 3
     assert m.counts.c + m.counts.u + m.counts.d == 1
+
+
+def test_retry_replays_the_same_random_choices(monkeypatch: pytest.MonkeyPatch) -> None:
+    draws: list[float] = []
+
+    def apply(conn: Any, op: str, rng: Any, p: float) -> int:
+        draws.append(rng.random())
+        if len(draws) == 1:
+            raise psycopg.OperationalError("down")
+        return 1
+
+    run(monkeypatch, apply, [], count=1, seed=3)
+    assert len(draws) == 2 and draws[0] == draws[1]
+
+
+def test_retried_run_matches_clean_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    def recorder(fail_at: int | None) -> tuple[Any, list[float]]:
+        seen: list[float] = []
+        state = {"calls": 0}
+
+        def apply(conn: Any, op: str, rng: Any, p: float) -> int:
+            state["calls"] += 1
+            value = rng.random()
+            if state["calls"] == fail_at:
+                raise psycopg.OperationalError("down")
+            seen.append(value)
+            return 1
+
+        return apply, seen
+
+    clean, clean_seen = recorder(None)
+    flaky, flaky_seen = recorder(4)
+    a = run(monkeypatch, clean, [], count=10, seed=11)
+    b = run(monkeypatch, flaky, [], count=10, seed=11)
+    assert clean_seen == flaky_seen
+    assert a.counts == b.counts
+
+
+def test_commit_outcome_unknown_is_not_retried(monkeypatch: pytest.MonkeyPatch) -> None:
+    def apply(conn: Any, op: str, rng: Any, p: float) -> int:
+        raise db.CommitOutcomeUnknownError("lost during commit")
+
+    connects: list[int] = []
+    with pytest.raises(db.CommitOutcomeUnknownError):
+        run(monkeypatch, apply, connects, count=3, seed=1)
+    assert len(connects) == 1
 
 
 def test_needs_exactly_one_limit(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -74,7 +74,8 @@ def test_create_update_delete_snapshot(
 def test_partition_date_is_utc_of_source_ts(
     spark: SparkSession, fixture_text: Callable[[str], str]
 ) -> None:
-    # create: 1793016000130 ms = 2026-10-26T12:00:00Z; delete: 1793102399999 ms = 2026-10-27T11:59:59Z
+    # create: 1793016000130 ms = 2026-10-26T12:00:00Z
+    # delete: 1793102399999 ms = 2026-10-27T11:59:59Z
     p = parse_batch(
         raw_batch(spark, [fixture_text("create"), fixture_text("delete")]), 0, INGESTED_AT
     )
