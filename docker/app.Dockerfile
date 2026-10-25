@@ -2,9 +2,9 @@
 # Two runtime targets from one lock file: `mutator` (no JVM) and `spark` (JRE, pyspark, baked jars).
 
 FROM ghcr.io/astral-sh/uv:0.13.5 AS uv
-FROM eclipse-temurin:17.0.20.1_1-jre-noble AS jre
+FROM eclipse-temurin:24.0.2_12-jre-noble AS jre
 
-FROM python:3.12.15-slim-bookworm AS build-base
+FROM python:3.15.0-slim-bookworm AS build-base
 COPY --from=uv /uv /usr/local/bin/uv
 ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
     UV_LINK_MODE=copy \
@@ -34,7 +34,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --no-editable --extra spark
 
 # Same base as the builders, so the venv's interpreter path and ABI match.
-FROM python:3.12.15-slim-bookworm AS runtime-base
+FROM python:3.15.0-slim-bookworm AS runtime-base
 RUN groupadd --system --gid 10001 app \
     && useradd --system --uid 10001 --gid app --create-home app \
     && mkdir /runs \
