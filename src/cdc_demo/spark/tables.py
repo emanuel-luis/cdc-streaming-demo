@@ -10,6 +10,13 @@ from pyspark.sql.types import StructType
 def create_table(
     spark: SparkSession, path: str, schema: StructType, partition_by: Sequence[str] = ()
 ) -> None:
+    """Create the table unless a Delta table is already there (restarts, older lakes).
+
+    An existing table may carry the schema of the DataFrames that created it, which can differ
+    in nullability from `schema`; it is left as it is.
+    """
+    if DeltaTable.isDeltaTable(spark, path):
+        return
     builder = DeltaTable.createIfNotExists(spark).location(qualified_local(path))
     builder = builder.addColumns(schema)
     if partition_by:

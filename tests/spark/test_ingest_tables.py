@@ -49,3 +49,20 @@ def test_writer_appends_to_the_created_tables(spark: SparkSession, lake: LakeSet
     assert read(spark, lake.cdc_log).count() == 1
     assert read(spark, lake.rejects).count() == 1
     assert read(spark, lake.ingest_runs).count() == 1
+
+
+def test_tables_written_before_create_tables_are_left_alone(
+    spark: SparkSession, lake: LakeSettings
+) -> None:
+    # A lake from the phase 1-3 consumer: the writer created the tables from its DataFrames.
+    writer = BatchWriter(lake, "test-app-v1", TOPIC, run_id="run-1")
+    writer(make_raw(spark, [value_of("create"), b"{broken"]), 0)
+    versions = {
+        path: spark.sql(f"DESCRIBE HISTORY delta.`{path}`").count()
+        for path in (lake.cdc_log, lake.rejects, lake.ingest_runs)
+    }
+    create_tables(spark, lake)
+    for path, count in versions.items():
+        assert spark.sql(f"DESCRIBE HISTORY delta.`{path}`").count() == count
+    writer(make_raw(spark, [value_of("update")], first_offset=2), 1)
+    assert read(spark, lake.cdc_log).count() == 2
