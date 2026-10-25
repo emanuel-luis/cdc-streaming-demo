@@ -2,7 +2,7 @@
 
 dbt builds into a staging file next to the published one; a passing build is checkpointed and
 renamed over `analytics.duckdb`, so a reader (the dashboard) never sees a half-built or failing
-warehouse (decision 39).
+warehouse (decision 40).
 """
 
 import json

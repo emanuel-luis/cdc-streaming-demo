@@ -11,7 +11,7 @@ flags:
   send_anonymous_usage_stats: false
 
 vars:
-  # DuckDB reads s3://, not s3a:// (decision 38). `cdc-demo build-marts` overrides it from LAKE_ROOT.
+  # DuckDB reads s3://, not s3a:// (decision 37). `cdc-demo build-marts` overrides it from LAKE_ROOT.
   lake_root: s3://cdc-demo
 
 models:

@@ -98,7 +98,7 @@ class LakeSettings(BaseSettings):
 
     @property
     def duckdb_root(self) -> str:
-        # DuckDB's S3 secrets apply to s3:// only; the s3a:// scheme is Hadoop's (decision 38).
+        # DuckDB's S3 secrets apply to s3:// only; the s3a:// scheme is Hadoop's (decision 37).
         for scheme in ("s3a://", "s3n://"):
             if self.lake_root.startswith(scheme):
                 return "s3://" + self.lake_root.removeprefix(scheme).rstrip("/")

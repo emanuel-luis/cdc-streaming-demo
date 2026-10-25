@@ -6,7 +6,8 @@ Lake on S3-compatible storage. Public portfolio repo; all data is synthetic.
 ## Commands
 
 - `make install`: `uv sync --all-extras`.
-- `make lint`: ruff check, ruff format --check, mypy strict on `src` (same as the CI lint job).
+- `make lint`: ruff check, ruff format --check, mypy strict on `src` and `dashboard`, and
+  `dbt parse` (same as the CI lint job).
 - `make test-fast`: pytest without a JVM (the default selection deselects `spark` and
   `integration`).
 - `make test-spark`: Spark tests. Linux, macOS, WSL or CI only, never Windows Python. On the
@@ -15,22 +16,29 @@ Lake on S3-compatible storage. Public portfolio repo; all data is synthetic.
 - `make proto`: recompile `src/cdc_demo/proto/orders_value.desc` from the `.proto` (dev group:
   `grpcio-tools`).
 - `make merge`: run `cdc-demo merge` in the `spark-job` container (stack up).
-- `make demo`: fresh stack, seeded workload, `cdc-demo verify`, two merges, `verify-current`;
-  leaves the stack up.
+- `make marts`: build the DuckDB marts with dbt in the `analytics` container (stack up).
+- `make dashboard`: start the Streamlit dashboard (http://localhost:8501).
+- `make demo`: fresh stack, seeded workload, `cdc-demo verify`, two merges, `verify-current`,
+  `build-marts`, `verify-marts`; leaves the stack up.
   `make down` removes it with its volumes.
 
 ## Repo map
 
 - `compose.yaml`: the stack; project name `cdc-streaming-demo`; host ports from `.env`.
-- `docker/app.Dockerfile`: `mutator` target (no JVM) and `spark` target (JRE, pyspark, Ivy
-  cache baked by `cdc-demo spark-warmup`). `docker/connect.Dockerfile`: Debezium Connect plus
+- `docker/app.Dockerfile`: `mutator` target (no JVM), `spark` target (JRE, pyspark, Ivy
+  cache baked by `cdc-demo spark-warmup`) and `analytics` target (dbt, DuckDB with its
+  extensions baked in, Streamlit). `docker/connect.Dockerfile`: Debezium Connect plus
   Confluent's Protobuf converter.
 - `postgres/initdb/`: schema, seeded data, `cdc_reader` role, publication.
 - `debezium/orders-connector.json`: connector config, registered by `scripts/register-connector.sh`.
 - `src/cdc_demo/`: `cli.py` (Typer), `settings.py`, `mutator/`, `spark/session.py`,
   `ingest/` (schemas, parse, foreachBatch writer, streaming job), `merge/` (current table
   merger: schemas, `run_merge`), `proto/` (the Protobuf contract), `contract.py`
-  (`check-schema`), `verify.py`, `verify_current.py` (`verify-current`).
+  (`check-schema`), `verify.py`, `verify_current.py` (`verify-current`), `marts.py`
+  (`build-marts`), `verify_marts.py` (`verify-marts`), `spark/tables.py` (table creation
+  shared by the consumer and the merger).
+- `dbt/`: dbt-duckdb project `cdc_demo` (staging views, marts with enforced contracts, tests).
+  `dashboard/app.py`: Streamlit app over the DuckDB file.
 - `docs/PLAN.md`: layers, contracts, runtime contract, phases. `docs/DECISIONS.md`: decision log.
 
 ## Invariants
@@ -46,8 +54,14 @@ Lake on S3-compatible storage. Public portfolio repo; all data is synthetic.
 - `current/orders` is written only by `cdc-demo merge`. The merge watermark moves only after the
   MERGE commits, and the MERGE updates a row only when the event is newer than the stored one
   by `(source_lsn, kafka_offset)`. The merger reads the CDC log once, at a pinned version.
-- `cdc_demo.cli`, `settings`, `logging`, `mutator` and `contract` never import pyspark at
-  module level: the mutator image has no pyspark.
+- The warehouse file `analytics.duckdb` is written only by `cdc-demo build-marts`: dbt builds
+  into `analytics.build.duckdb` and the file is renamed into place after `dbt build` passed.
+  Nothing else opens it for writing; the dashboard opens it read-only. DuckDB reads the lake
+  through `s3://` (never `s3a://`, whose secrets it ignores): use `LakeSettings.duckdb_root`.
+- `cdc_demo.cli`, `settings`, `logging`, `mutator` and `contract` never import pyspark, duckdb,
+  dbt or streamlit at module level: the mutator image has none of them.
+- dbt-common needs `protobuf<7`, so the dev group caps `protobuf` below 7 and `grpcio-tools`
+  below 1.83; after a bump, rerun the descriptor test and `make proto` if it drifts.
 - The spark extra pins `pyspark` and `delta-spark` exactly; the Kafka, spark-protobuf and
   hadoop-aws package versions are derived from the installed pyspark, so bump them together.
 - Env var names, CLI options and table paths are the contract in `docs/PLAN.md`; change the
