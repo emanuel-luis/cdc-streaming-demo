@@ -157,3 +157,43 @@ class SparkSettings(BaseSettings):
     spark_master: str = "local[2]"
     spark_driver_memory: str = "1g"
     spark_ivy_dir: str | None = None
+
+
+class SqlServerSettings(BaseSettings):
+    """The SQL Server source of the `mssql` profile. Passwords are SecretStr; the connection
+    string carries none, the library takes user and password as options of their own."""
+
+    model_config = _config("SQLSERVER_")
+
+    host: str = "localhost"
+    port: int = 1433
+    db: str = "cdc_demo"
+    user: str = "cdc_owner"
+    password: SecretStr = SecretStr("Cdc_owner_pw1!")
+    cdc_user: str = "cdc_reader"
+    cdc_password: SecretStr = SecretStr("Cdc_reader_pw1!")
+    capture_instance: str = "dbo_orders"
+
+    def connection_string(self) -> str:
+        # The demo server uses a self-signed certificate: encrypt, but do not verify it.
+        return (
+            f"Server={self.host},{self.port};Database={self.db};"
+            "Encrypt=yes;TrustServerCertificate=yes"
+        )
+
+    def connect_kwargs(self) -> dict[str, Any]:
+        """Arguments for `mssql_python.connect` as the owner (mutator, verify)."""
+        return {
+            "connection_str": self.connection_string(),
+            "UID": self.user,
+            "PWD": self.password.get_secret_value(),
+        }
+
+    def source_options(self) -> dict[str, str]:
+        """Options of `format("mssql_cdc")`, logged in as the least-privilege reader."""
+        return {
+            "connectionString": self.connection_string(),
+            "user": self.cdc_user,
+            "password": self.cdc_password.get_secret_value(),
+            "captureInstance": self.capture_instance,
+        }
