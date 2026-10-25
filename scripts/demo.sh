@@ -46,7 +46,9 @@ docker compose run --rm spark-job verify --manifest /runs/demo.json --timeout 30
 
 banner "Merging the CDC log into the current table (twice: the second run must change nothing)"
 docker compose run --rm spark-job merge
-second=$(docker compose run --rm -T spark-job merge | tee /dev/stderr)
+# Capture, then print: `tee /dev/stderr` reopens a redirected log file and truncates it.
+second=$(docker compose run --rm -T spark-job merge)
+printf '%s\n' "$second"
 grep -q 'inserted 0, updated 0, deleted 0' <<<"$second"
 
 banner "Verifying the current table equals Postgres row by row"
