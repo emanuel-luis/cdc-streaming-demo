@@ -1,0 +1,20 @@
+select
+    event_id,
+    op,
+    order_id,
+    customer_id,
+    status,
+    amount,
+    created_at,
+    updated_at,
+    before_status,
+    before_amount,
+    make_timestamp(source_ts_ms * 1000)::timestamptz as source_ts,
+    source_lsn,
+    kafka_topic,
+    kafka_partition,
+    kafka_offset,
+    kafka_timestamp,
+    ingest_batch_id,
+    ingested_at
+from {{ source('lake', 'orders_cdc_log') }}

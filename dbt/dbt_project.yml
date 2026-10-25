@@ -1,0 +1,26 @@
+name: cdc_demo
+version: "1.0.0"
+config-version: 2
+profile: cdc_demo
+
+model-paths: [models]
+macro-paths: [macros]
+test-paths: [tests]
+
+flags:
+  send_anonymous_usage_stats: false
+
+vars:
+  # DuckDB reads s3://, not s3a:// (decision 38). `cdc-demo build-marts` overrides it from LAKE_ROOT.
+  lake_root: s3://cdc-demo
+
+models:
+  cdc_demo:
+    staging:
+      +materialized: view
+      +schema: staging
+    marts:
+      +materialized: table
+      +schema: marts
+      +contract:
+        enforced: true

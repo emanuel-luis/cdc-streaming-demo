@@ -1,0 +1,103 @@
+version: 2
+
+models:
+  - name: dim_orders_current
+    description: One row per live order, as the merger left it.
+    columns:
+      - name: order_id
+        data_type: bigint
+        data_tests: [unique, not_null]
+      - name: customer_id
+        data_type: integer
+      - name: status
+        data_type: varchar
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [pending, confirmed, shipped, delivered, cancelled]
+      - name: amount
+        data_type: decimal(12,2)
+      - name: created_at
+        data_type: timestamptz
+      - name: updated_at
+        data_type: timestamptz
+      - name: merged_at
+        data_type: timestamptz
+
+  - name: fct_order_status_changes
+    description: One row per status change taken from the CDC log.
+    columns:
+      - name: event_id
+        data_type: varchar
+        data_tests: [unique, not_null]
+      - name: order_id
+        data_type: bigint
+        data_tests: [not_null]
+      - name: op
+        data_type: varchar
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [c, u, d]
+      - name: from_status
+        data_type: varchar
+      - name: to_status
+        data_type: varchar
+      - name: changed_at
+        data_type: timestamptz
+      - name: source_lsn
+        data_type: bigint
+      - name: kafka_offset
+        data_type: bigint
+
+  - name: fct_order_activity_hourly
+    description: CDC events and distinct orders per hour of source time and operation.
+    data_tests:
+      - unique_combination:
+          arguments:
+            columns: [activity_hour, op]
+    columns:
+      - name: activity_hour
+        data_type: timestamptz
+      - name: op
+        data_type: varchar
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [r, c, u, d]
+      - name: events
+        data_type: bigint
+      - name: distinct_orders
+        data_type: bigint
+
+  - name: fct_pipeline_runs
+    description: One row per consumer batch and per merge run.
+    data_tests:
+      - unique_combination:
+          arguments:
+            columns: [component, run_id, batch_id]
+    columns:
+      - name: component
+        data_type: varchar
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [ingest, merge]
+      - name: run_id
+        data_type: varchar
+        data_tests: [not_null]
+      - name: batch_id
+        data_type: bigint
+      - name: started_at
+        data_type: timestamptz
+      - name: finished_at
+        data_type: timestamptz
+      - name: duration_seconds
+        data_type: double
+      - name: input_rows
+        data_type: bigint
+      - name: output_rows
+        data_type: bigint
+      - name: rejected_rows
+        data_type: bigint
