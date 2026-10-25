@@ -14,7 +14,9 @@ Lake on S3-compatible storage. Public portfolio repo; all data is synthetic.
   `wsl -d Ubuntu -e bash -lc 'cd /mnt/d/dev/Pessoal/cdc-streaming-demo && UV_PROJECT_ENVIRONMENT=$HOME/.venvs/cdc-streaming-demo make test-spark'`.
 - `make proto`: recompile `src/cdc_demo/proto/orders_value.desc` from the `.proto` (dev group:
   `grpcio-tools`).
-- `make demo`: fresh stack, seeded workload, `cdc-demo verify`; leaves the stack up.
+- `make merge`: run `cdc-demo merge` in the `spark-job` container (stack up).
+- `make demo`: fresh stack, seeded workload, `cdc-demo verify`, two merges, `verify-current`;
+  leaves the stack up.
   `make down` removes it with its volumes.
 
 ## Repo map
@@ -26,8 +28,9 @@ Lake on S3-compatible storage. Public portfolio repo; all data is synthetic.
 - `postgres/initdb/`: schema, seeded data, `cdc_reader` role, publication.
 - `debezium/orders-connector.json`: connector config, registered by `scripts/register-connector.sh`.
 - `src/cdc_demo/`: `cli.py` (Typer), `settings.py`, `mutator/`, `spark/session.py`,
-  `ingest/` (schemas, parse, foreachBatch writer, streaming job), `proto/` (the Protobuf
-  contract), `contract.py` (`check-schema`), `verify.py`.
+  `ingest/` (schemas, parse, foreachBatch writer, streaming job), `merge/` (current table
+  merger: schemas, `run_merge`), `proto/` (the Protobuf contract), `contract.py`
+  (`check-schema`), `verify.py`, `verify_current.py` (`verify-current`).
 - `docs/PLAN.md`: layers, contracts, runtime contract, phases. `docs/DECISIONS.md`: decision log.
 
 ## Invariants
@@ -40,6 +43,9 @@ Lake on S3-compatible storage. Public portfolio repo; all data is synthetic.
 - `src/cdc_demo/proto/orders_value.proto`, `orders_value.desc` and the schema registered by
   Debezium change together: edit the `.proto`, run `make proto`, run `make demo` (its
   `check-schema` step fails on drift). Never hand-edit the `.desc`.
+- `current/orders` is written only by `cdc-demo merge`. The merge watermark moves only after the
+  MERGE commits, and the MERGE updates a row only when the event is newer than the stored one
+  by `(source_lsn, kafka_offset)`. The merger reads the CDC log once, at a pinned version.
 - `cdc_demo.cli`, `settings`, `logging`, `mutator` and `contract` never import pyspark at
   module level: the mutator image has no pyspark.
 - The spark extra pins `pyspark` and `delta-spark` exactly; the Kafka, spark-protobuf and

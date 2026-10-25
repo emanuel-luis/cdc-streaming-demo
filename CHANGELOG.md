@@ -24,6 +24,13 @@ All notable changes to this project are documented here. The format follows
 - `cdc-demo check-schema`: compatibility check against the registry plus a text comparison;
   `make demo` runs it before the mutations.
 - `spark-protobuf` package for the consumer and the Ivy warmup.
+- `cdc-demo merge`: batch merger from the CDC log into `current/orders` (one row per live
+  order). It reads the log at a pinned Delta version, deduplicates by `(source_lsn,
+  kafka_offset)`, applies a MERGE with a newer-than guard and moves an offset watermark only
+  after the MERGE commits. Control tables `_meta/merge_watermark` and `_meta/merge_runs`.
+- `cdc-demo verify-current`: compares the current table with Postgres row by row.
+- `make merge`; `make demo` runs the merge twice (the second run must change nothing) and
+  verifies the current table against Postgres.
 
 ### Changed
 
