@@ -80,6 +80,18 @@ class LakeSettings(BaseSettings):
     def ingest_runs(self) -> str:
         return self._path("_meta", "ingest_runs")
 
+    @property
+    def current_orders(self) -> str:
+        return self._path("current", "orders")
+
+    @property
+    def merge_watermark(self) -> str:
+        return self._path("_meta", "merge_watermark")
+
+    @property
+    def merge_runs(self) -> str:
+        return self._path("_meta", "merge_runs")
+
     def checkpoint(self, name: str) -> str:
         return self._path("_checkpoints", name)
 
