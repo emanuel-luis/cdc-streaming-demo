@@ -173,17 +173,20 @@ Every long-running service has a memory limit in `compose.yaml`, sized for a 16 
 | Service | Limit | Measured peak |
 | --- | --- | --- |
 | postgres | 256 MB | 73 MB |
-| kafka | 1 GB (heap 512 MB) | 640 MB |
-| schema-registry | 512 MB (heap 256 MB) | 340 MB |
+| kafka | 1 GB (heap 512 MB) | 690 MB |
+| schema-registry | 512 MB (heap 256 MB) | 410 MB |
 | connect | 1.25 GB (heap 512 MB) | 1.03 GB |
-| s3 | 512 MB | 140 MB |
-| consumer (Spark driver 1 GB) | 2.5 GB | 2.1 GB |
-| analytics (short-lived, DuckDB capped at 512 MB) | 1 GB | not measured yet |
-| dashboard (on demand) | 512 MB | not measured yet |
+| s3 | 512 MB | 170 MB |
+| consumer (Spark driver 1 GB) | 2.5 GB | 2.3 GB |
+| analytics (short-lived, DuckDB capped at 512 MB) | 1 GB | 200 MB |
+| dashboard (on demand) | 512 MB | 52 MB |
 
-`verify` runs in a short-lived `spark-job` container with the consumer's limit, 2.5 GB (Spark
-driver 1 GB). It peaked at 2.0 GB under the earlier 2 GB limit, so it got the same headroom
-as the consumer. With the consumer and a `spark-job` running, the stack used about 6 GB.
+`verify`, `merge` and `verify-current` run in short-lived `spark-job` containers with the
+consumer's limit, 2.5 GB (Spark driver 1 GB). Both Spark containers grow toward their limit:
+the same `spark-job` runs peaked at 2.0 GB under an earlier 2 GB limit and at 2.4 GB under
+2.5 GB, and none was killed, which points to page cache the kernel reclaims rather than heap.
+The dashboard figure comes from health probes, with no browser session open. With the
+consumer and a `spark-job` running, the whole stack used at most about 6.2 GB in one sample.
 
 ## Design notes
 
