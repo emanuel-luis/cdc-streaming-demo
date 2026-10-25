@@ -59,8 +59,9 @@ and a dashboard) are the next phases; see [Roadmap](#roadmap).
 ## Tech stack
 
 Python 3.12 · PySpark 4.2 Structured Streaming · Delta Lake 4.4 · Debezium 3.7 · Protobuf with
-Confluent Schema Registry · Kafka (Confluent Platform 8.3, KRaft) · PostgreSQL 18 · RustFS (S3-compatible) · Docker Compose · Typer ·
-pydantic-settings · uv · ruff · mypy · pytest + Hypothesis · GitHub Actions
+Confluent Schema Registry · Kafka (Confluent Platform 8.3, KRaft) · PostgreSQL 18 · RustFS
+(S3-compatible) · Docker Compose · Typer · pydantic-settings · uv · ruff · mypy ·
+pytest + Hypothesis · GitHub Actions
 
 ## Quickstart
 
@@ -83,8 +84,8 @@ around.
 Ports are the defaults; change any of them in `.env` (copy `.env.example`).
 
 1. **Bring the stack up.** `make up` starts Postgres, Kafka, Schema Registry, Debezium Connect,
-   the object store and the consumer. Two init containers register the connector (`PUT`, so re-running is safe)
-   and create the bucket.
+   the object store and the consumer. Two init containers register the connector (`PUT`, so
+   re-running is safe) and create the bucket.
 2. **Watch the snapshot arrive.** Debezium reads the 500 seeded orders as `op = r` events:
 
    ```bash
