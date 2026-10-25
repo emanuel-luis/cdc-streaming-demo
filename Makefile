@@ -1,7 +1,7 @@
 SHELL := bash
 .DEFAULT_GOAL := help
 
-.PHONY: help install lint fmt test-fast test-spark test up down demo ps logs ui
+.PHONY: help install lint fmt proto test-fast test-spark test up down demo ps logs ui
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-12s %s\n", $$1, $$2}'
@@ -17,6 +17,9 @@ lint: ## Ruff check, ruff format check, mypy (same as the CI lint job)
 fmt: ## Format and apply safe lint fixes
 	uv run ruff format
 	uv run ruff check --fix
+
+proto: ## Recompile the Protobuf descriptor set from the .proto
+	uv run python scripts/compile_proto.py
 
 test-fast: ## Unit tests, no JVM
 	uv run pytest -m "not spark and not integration"

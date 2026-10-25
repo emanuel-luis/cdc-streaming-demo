@@ -1,4 +1,4 @@
-"""SparkSession builder: Delta, Kafka, s3a, UTC."""
+"""SparkSession builder: Delta, Kafka, Protobuf, s3a, UTC."""
 
 import re
 from pathlib import Path
@@ -29,6 +29,7 @@ def spark_packages() -> list[str]:
     return [
         f"org.apache.spark:spark-sql-kafka-0-10_{SCALA_BINARY}:{pyspark.__version__}",
         f"org.apache.hadoop:hadoop-aws:{hadoop_version()}",
+        f"org.apache.spark:spark-protobuf_{SCALA_BINARY}:{pyspark.__version__}",
     ]
 
 
@@ -37,18 +38,26 @@ def build_session(
     s3: S3Settings | None = None,
     *,
     kafka: bool = True,
+    protobuf: bool | None = None,
     hadoop_aws: bool | None = None,
     app_name: str = "cdc-demo",
 ) -> SparkSession:
     """Build a Delta-enabled session.
 
-    Kafka and hadoop-aws jars are only requested when needed, so tests with a local file://
-    lake root resolve nothing but Delta. hadoop-aws defaults to on when S3 settings are given.
+    Kafka, spark-protobuf and hadoop-aws jars are only requested when needed, so tests with a
+    local file://lake root resolve little besides Delta. protobuf defaults to the kafka flag
+    and hadoop-aws to on when S3 settings are given.
     """
-    kafka_pkg, aws_pkg = spark_packages()
+    kafka_pkg, aws_pkg, protobuf_pkg = spark_packages()
+    if protobuf is None:
+        protobuf = kafka
     if hadoop_aws is None:
         hadoop_aws = s3 is not None
-    extra = ([kafka_pkg] if kafka else []) + ([aws_pkg] if hadoop_aws else [])
+    extra = (
+        ([kafka_pkg] if kafka else [])
+        + ([protobuf_pkg] if protobuf else [])
+        + ([aws_pkg] if hadoop_aws else [])
+    )
 
     builder = (
         SparkSession.builder.appName(app_name)
