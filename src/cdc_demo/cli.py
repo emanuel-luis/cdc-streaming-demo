@@ -93,6 +93,37 @@ def verify(
 
 
 @app.command()
+def merge() -> None:
+    """Merge new CDC log events into the current orders table (batch, safe to re-run)."""
+    from cdc_demo.merge.job import run_merge
+    from cdc_demo.settings import SparkSettings
+    from cdc_demo.spark.session import build_session
+
+    configure_logging()
+    lake = LakeSettings()
+    spark = build_session(SparkSettings(), _s3_for(lake), kafka=False, app_name="cdc-demo-merge")
+    try:
+        result = run_merge(spark, lake)
+    finally:
+        spark.stop()
+    typer.echo(result.summary())
+
+
+@app.command()
+def verify_current(
+    timeout: Annotated[float, typer.Option(min=0, help="Seconds to wait for a match.")] = 0,
+) -> None:
+    """Compare the current table with Postgres row by row; exit 1 on any difference."""
+    from cdc_demo.settings import PostgresSettings, SparkSettings
+    from cdc_demo.verify_current import run_verify_current
+
+    configure_logging()
+    lake = LakeSettings()
+    code = run_verify_current(timeout, lake, PostgresSettings(), _s3_for(lake), SparkSettings())
+    raise typer.Exit(code)
+
+
+@app.command()
 def check_schema() -> None:
     """Compare the checked-in Protobuf schema with the registered one; exit 1 on any difference."""
     from cdc_demo.contract import RegistryError, format_report
