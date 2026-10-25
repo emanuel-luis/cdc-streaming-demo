@@ -3,9 +3,10 @@
 #   connect 1280m (heap 512m) | s3 512m | consumer 2560m (driver 1g).
 # On demand: kafka-ui 512m and dashboard 512m (profile ui); spark-job 2560m, analytics 1g
 #   (dbt's DuckDB capped at 512MB) and mutator 256m (profile tools); curl init containers 64m.
-# Peaks measured during `make demo` on 2026-10-25: consumer 2.1 GB, spark-job 2.0 GB (under
-#   the old 2 GB limit), connect 1.03 GB, kafka 0.64 GB, schema-registry 0.34 GB,
-#   s3 0.14 GB, postgres 0.07 GB, mutator 0.04 GB. analytics and dashboard: not measured yet.
+# Peaks measured during `make demo` on 2026-10-25 (highest of three runs): consumer 2.3 GB,
+#   spark-job 2.4 GB (both Spark containers grow toward their limit, see the README),
+#   connect 1.03 GB, kafka 0.67 GB, schema-registry 0.40 GB, analytics 0.19 GB, s3 0.17 GB,
+#   postgres 0.07 GB, dashboard 0.05 GB, mutator 0.04 GB.
 name: cdc-streaming-demo
 
 x-app-env: &app-env
