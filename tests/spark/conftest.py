@@ -13,10 +13,11 @@ from cdc_demo.spark.session import build_session
 
 @pytest.fixture(scope="session")
 def spark() -> Iterator[SparkSession]:
-    # No Kafka, no S3: only Delta is resolved, and the lake is a local directory.
+    # No Kafka, no S3: Delta and spark-protobuf are resolved, and the lake is a local directory.
     session = build_session(
         SparkSettings(spark_master="local[1]", spark_driver_memory="1g"),
         kafka=False,
+        protobuf=True,
         app_name="cdc-demo-tests",
     )
     session.conf.set("spark.sql.shuffle.partitions", "1")

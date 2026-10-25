@@ -1,4 +1,4 @@
-"""Spark schemas: the Debezium JSON envelope and the three tables the consumer writes."""
+"""Spark schemas of the three tables the consumer writes."""
 
 from pyspark.sql.types import (
     DateType,
@@ -11,40 +11,8 @@ from pyspark.sql.types import (
     TimestampType,
 )
 
-# Debezium with schemas.enable=false: decimals arrive as strings
-# (decimal.handling.mode=string) and TIMESTAMPTZ as ISO-8601 strings (ZonedTimestamp).
-ROW_SCHEMA = StructType(
-    [
-        StructField("id", LongType()),
-        StructField("customer_id", IntegerType()),
-        StructField("status", StringType()),
-        StructField("amount", StringType()),
-        StructField("created_at", StringType()),
-        StructField("updated_at", StringType()),
-    ]
-)
-
-SOURCE_SCHEMA = StructType(
-    [
-        StructField("ts_ms", LongType()),
-        StructField("lsn", LongType()),
-        StructField("txId", LongType()),
-        StructField("snapshot", StringType()),
-        StructField("db", StringType()),
-        StructField("schema", StringType()),
-        StructField("table", StringType()),
-    ]
-)
-
-ENVELOPE_SCHEMA = StructType(
-    [
-        StructField("before", ROW_SCHEMA),
-        StructField("after", ROW_SCHEMA),
-        StructField("source", SOURCE_SCHEMA),
-        StructField("op", StringType()),
-        StructField("ts_ms", LongType()),
-    ]
-)
+# Decimals arrive as strings (decimal.handling.mode=string), so the Envelope in
+# cdc_demo/proto carries `amount` as a string; parse.py casts it to this type.
 
 AMOUNT = DecimalType(12, 2)
 

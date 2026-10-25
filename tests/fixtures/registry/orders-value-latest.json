@@ -1,0 +1,10 @@
+{
+  "subject": "cdc.public.orders-value",
+  "version": 1,
+  "id": 2,
+  "guid": "8ff07320-b716-8d4f-4cad-47145414f482",
+  "schemaType": "PROTOBUF",
+  "schema": "syntax = \"proto3\";\npackage cdc.public.orders;\n\nmessage Envelope {\n  Value before = 1;\n  Value after = 2;\n  Source source = 3;\n  block transaction = 4;\n  string op = 5;\n  int64 ts_ms = 6;\n  int64 ts_us = 7;\n  int64 ts_ns = 8;\n\n  message Value {\n    int64 id = 1;\n    int32 customer_id = 2;\n    string status = 3;\n    string amount = 4;\n    string created_at = 5;\n    string updated_at = 6;\n  }\n  message Source {\n    string version = 1;\n    string connector = 2;\n    string name = 3;\n    int64 ts_ms = 4;\n    string snapshot = 5;\n    string db = 6;\n    string sequence = 7;\n    int64 ts_us = 8;\n    int64 ts_ns = 9;\n    string schema = 10;\n    string table = 11;\n    int64 txId = 12;\n    int64 lsn = 13;\n    int64 xmin = 14;\n    string origin = 15;\n    int64 origin_lsn = 16;\n  }\n  message block {\n    string id = 1;\n    int64 total_order = 2;\n    int64 data_collection_order = 3;\n  }\n}\n",
+  "ts": 1792939199603,
+  "deleted": false
+}

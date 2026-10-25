@@ -24,18 +24,21 @@ Checkpoints live under `s3a://cdc-demo/_checkpoints/<query>`.
 ```
 compose.yaml                 # whole stack, project name cdc-streaming-demo
 .env.example                 # every port, credential and tunable, commented
-Makefile                     # help, install, lint, test, test-fast, test-spark, up, down, demo
+Makefile                     # help, install, lint, proto, test(-fast, -spark), up, down, demo
 docker/app.Dockerfile        # targets: mutator (slim) and spark (JRE + pyspark + baked jars)
+docker/connect.Dockerfile    # Debezium Connect + Confluent Protobuf converter (Phase 2)
 postgres/initdb/             # schema, seed (seeded random), CDC role, publication
 debezium/orders-connector.json
-scripts/                     # register-connector.sh, demo.sh, wait helpers
+scripts/                     # register-connector.sh, demo.sh, wait helpers, compile_proto.py
 src/cdc_demo/                # one package, uv_build backend, py.typed
-  cli.py                     # Typer app: mutate, consume, verify (+ merge later)
+  cli.py                     # Typer app: mutate, consume, verify, check-schema (+ merge later)
   settings.py                # pydantic-settings, one class per component, env prefixes
   logging.py                 # structured log lines (run_id, batch_id, counts)
   mutator/                   # status machine, op selection, SQL, manifest
   spark/session.py           # SparkSession builder (Delta, Kafka, s3a, UTC)
-  ingest/                    # Debezium envelope schema, parse + validate, foreachBatch writer
+  contract.py                # check-schema: checked-in .proto vs Schema Registry (stdlib only)
+  proto/                     # orders_value.proto (registry text) + orders_value.desc (compiled)
+  ingest/                    # table schemas, parse + validate, foreachBatch writer
   verify.py                  # end-to-end assertions used by make demo
 tests/                       # unit (no JVM), spark-marked, integration-marked
 docs/                        # PLAN.md, DECISIONS.md
@@ -50,10 +53,20 @@ created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ` (trigger keeps `updated_at`). `R
 FULL` so updates and deletes carry the full before image. Seed: 500 rows generated with
 `setseed()` so every fresh stack starts from the same data.
 
-Debezium (Phase 1-2, JSON without schemas): envelope `{before, after, source, op, ts_ms}`;
+Debezium (Phase 1, JSON without schemas): envelope `{before, after, source, op, ts_ms}`;
 `amount` as string (`decimal.handling.mode=string`); `TIMESTAMPTZ` as ISO-8601 strings
 (`io.debezium.time.ZonedTimestamp`); deletes are followed by a tombstone (null value), which the
 consumer skips and counts.
+
+Debezium (Phase 2, Protobuf): keys and values go through Confluent's `ProtobufConverter`, which
+registers `cdc.public.orders-key` and `cdc.public.orders-value` in Schema Registry. The value is
+`cdc.public.orders.Envelope` with the same fields as above (`amount` and the timestamps stay
+strings). Wire format of a Kafka value: byte 0 is the magic byte 0, bytes 1-4 the schema id
+(big-endian), byte 5 the message index `[0]` as one 0 byte, then the Protobuf payload. The
+consumer ignores the schema id and decodes with `from_protobuf` and the descriptor set compiled
+from the checked-in `src/cdc_demo/proto/orders_value.proto`. Proto3 scalars at their zero value
+decode as null (decision 26). Tombstones are unchanged. `cdc-demo check-schema` fails when the
+registered value schema is incompatible with, or differs from, the checked-in one.
 
 Raw CDC log (Delta, partitioned by `_partition_date`):
 
@@ -70,9 +83,17 @@ Raw CDC log (Delta, partitioned by `_partition_date`):
 | ingested_at | TIMESTAMP | UTC |
 | _partition_date | DATE | from `source_ts_ms`, UTC |
 
-Validation: a row is rejected when the value is not valid JSON for the envelope, `op` is not one
-of c/u/d/r, `order_id` is null, or a c/u/r event has no after image. Rejects keep the raw value,
-the reason and the coordinates.
+Validation: a row is rejected, with one of these reasons, when
+
+- `invalid_wire_header`: the value is shorter than 6 bytes, byte 0 is not 0, or byte 5 is not 0;
+- `unparseable_protobuf`: the payload does not decode as an `Envelope`;
+- `invalid_op`: `op` is not one of c/u/d/r;
+- `missing_after_image`: a c/u/r event has no after image;
+- `null_order_id`: `coalesce(after.id, before.id)` is null;
+- `invalid_field`: `amount`, `created_at` or `updated_at` does not convert.
+
+Rejects keep the coordinates and the reason; `raw_value` is the base64 of the Kafka value
+bytes (decision 24).
 
 ## Runtime contract (Phase 1-2)
 
@@ -84,14 +105,15 @@ Pinned versions (checked 2026-10-25):
 | --- | --- |
 | Postgres | `postgres:18.6-alpine` (PG 18 moved PGDATA: mount the volume at `/var/lib/postgresql`) |
 | Kafka | `confluentinc/cp-kafka:8.3.2`, KRaft single node (broker + controller) |
-| Schema Registry (Phase 2 PR) | `confluentinc/cp-schema-registry:8.3.2` |
+| Schema Registry | `confluentinc/cp-schema-registry:8.3.2` (compatibility `backward`) |
+| Connect image | `docker/connect.Dockerfile`: Debezium 3.7.0.Final + Confluent Protobuf converter 8.3.2 |
 | Debezium | `quay.io/debezium/connect:3.7.0.Final` (Docker Hub `debezium/connect` stopped at 3.0) |
 | Object storage | `rustfs/rustfs:1.0.3` (S3-compatible, Apache-2.0); fallback `chrislusf/seaweedfs:4.50` |
 | Init containers | `curlimages/curl:8.23.0` (connector PUT, bucket create with `--aws-sigv4`) |
 | Kafka UI (profile `ui`) | `ghcr.io/kafbat/kafka-ui:v1.5.0` |
 | App base | `python:3.12.15-slim-bookworm` + JRE from `eclipse-temurin:17.0.20.1_1-jre-noble` + `ghcr.io/astral-sh/uv:0.13.5` |
 | Spark | `pyspark==4.2.0` (Scala 2.13), `delta-spark==4.4.1` |
-| Spark packages | `io.delta:delta-spark_2.13:4.4.1`, `org.apache.spark:spark-sql-kafka-0-10_2.13:<pyspark version>`, `org.apache.hadoop:hadoop-aws:<hadoop version bundled in pyspark/jars>` |
+| Spark packages | `io.delta:delta-spark_2.13:4.4.1`, `org.apache.spark:spark-sql-kafka-0-10_2.13:<pyspark version>`, `org.apache.hadoop:hadoop-aws:<hadoop version bundled in pyspark/jars>`, `org.apache.spark:spark-protobuf_2.13:<pyspark version>` |
 
 Environment (names are the contract; defaults in `.env.example`):
 
@@ -100,13 +122,14 @@ Environment (names are the contract; defaults in `.env.example`):
 | `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` | `localhost`, `5432`, `cdc_demo`, `cdc_owner`, `cdc_owner_pw` | mutator, verify, postgres image |
 | `CDC_DB_USER`, `CDC_DB_PASSWORD` | `cdc_reader`, `cdc_reader_pw` | Debezium (replication role, created by initdb) |
 | `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` (`kafka:29092` inside compose) | consumer |
-| `CDC_TOPIC` | `cdc.public.orders` | consumer |
+| `CDC_TOPIC` | `cdc.public.orders` | consumer, check-schema (subject `<CDC_TOPIC>-value`) |
+| `SCHEMA_REGISTRY_URL` | `http://localhost:8081` (`http://schema-registry:8081` inside compose) | check-schema |
 | `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_REGION` | `http://localhost:9000`, `cdc_demo_admin`, `cdc_demo_secret`, `us-east-1` | consumer, verify, s3 image |
 | `LAKE_ROOT` | `s3a://cdc-demo` | consumer, verify (a `file://` path in tests) |
 | `CONSUMER_TRIGGER_INTERVAL`, `CONSUMER_MAX_OFFSETS_PER_TRIGGER`, `CONSUMER_APP_ID` | `10 seconds`, `10000`, `orders-cdc-consumer-v1` | consumer |
 | `SPARK_MASTER`, `SPARK_DRIVER_MEMORY`, `SPARK_IVY_DIR` | `local[2]`, `1g`, unset (`/opt/spark-ivy` in the image) | Spark jobs |
 | `MUTATOR_RATE`, `MUTATOR_SEED`, `MUTATOR_INSERT_WEIGHT`, `MUTATOR_UPDATE_WEIGHT`, `MUTATOR_DELETE_WEIGHT`, `MUTATOR_CANCEL_PROBABILITY` | `20`, unset, `0.5`, `0.4`, `0.1`, `0.1` | mutator |
-| Host ports: `POSTGRES_PORT`, `KAFKA_PORT`, `CONNECT_PORT`, `S3_API_PORT`, `S3_CONSOLE_PORT`, `SPARK_UI_PORT`, `KAFKA_UI_PORT` | 5432, 9092, 8083, 9000, 9001, 4040, 8090 | compose, bound to 127.0.0.1 |
+| Host ports: `POSTGRES_PORT`, `KAFKA_PORT`, `CONNECT_PORT`, `SCHEMA_REGISTRY_PORT`, `S3_API_PORT`, `S3_CONSOLE_PORT`, `SPARK_UI_PORT`, `KAFKA_UI_PORT` | 5432, 9092, 8083, 8081, 9000, 9001, 4040, 8090 | compose, bound to 127.0.0.1 |
 
 CLI (`cdc-demo`, Typer):
 
@@ -115,6 +138,11 @@ CLI (`cdc-demo`, Typer):
   requested, counts: {c, u, d}, skipped}` (UTC ISO-8601) and logs one line per mutation.
 - `cdc-demo consume [--available-now]`: the streaming job; `--available-now` drains the topic
   and stops (tests, backfills).
+- `cdc-demo check-schema`: GETs the latest `<CDC_TOPIC>-value` version from the registry, asks
+  its compatibility API whether the checked-in `.proto` is compatible, and compares both texts
+  (comments, trailing whitespace and blank lines dropped). Prints a report; exits 0 only when
+  compatible and identical, 1 otherwise or on an HTTP error. Standard library only (the mutator
+  image runs it).
 - `cdc-demo verify --manifest PATH [--snapshot-rows 500] [--timeout 300]`: polls the Delta
   tables and Postgres until the expectations hold or the timeout passes; prints expected vs
   actual and exits 1 on mismatch. Assumes fresh volumes (one mutator run).
@@ -124,15 +152,18 @@ Containers:
 - `docker/app.Dockerfile` target `mutator` (no JVM) and target `spark` (JRE, `--extra spark`,
   Ivy cache baked at build time into `/opt/spark-ivy`, so runs need no network). Both run as a
   non-root user, entrypoint `cdc-demo`.
-- Compose services: `postgres`, `kafka`, `connect`, `connector-init` (one-shot), `s3`,
-  `s3-init` (one-shot), `consumer` (long-running, `restart: on-failure`), `mutator` and
-  `spark-job` (profile `tools`, used through `docker compose run --rm`), `kafka-ui` (profile
-  `ui`). Shared named volume `demo_runs` mounted at `/runs` for manifests.
+- Compose services: `postgres`, `kafka`, `schema-registry`, `connect`, `connector-init`
+  (one-shot), `s3`, `s3-init` (one-shot), `consumer` (long-running, `restart: on-failure`),
+  `mutator` and `spark-job` (profile `tools`, used through `docker compose run --rm`; `spark-job`
+  runs the image `consumer` builds, so one build exports it),
+  `kafka-ui` (profile `ui`). Shared named volume `demo_runs` mounted at `/runs` for manifests.
 - Broker auto topic creation is off; the connector creates its topic through
   `topic.creation.default.*` (1 partition, replication 1).
-- `make demo`: `down -v`, `up -d --build --wait`, wait until the topic holds the 500 snapshot
-  events, `run mutator mutate --count 200 --seed 42`, `run spark-job verify`. The stack stays up
-  for exploration; `make down` removes it with its volumes.
+- `make demo`: `down -v`, `--profile tools build` (`up` skips that profile and `run` never
+  rebuilds a stale image), `up -d --wait`, wait until the topic holds the 500 snapshot events,
+  `run mutator check-schema`, `run mutator mutate --count 200 --seed 42`,
+  `run spark-job verify`. The stack stays up for exploration; `make down` removes it with its
+  volumes.
 
 ## Idempotency rules
 
@@ -160,7 +191,7 @@ Each phase is one PR, stacked on the previous branch.
    image with Confluent's Protobuf converter, connector switched to Protobuf, consumer decodes
    the Confluent wire format with Spark's `from_protobuf` and a descriptor built from the
    checked-in `.proto`, a contract test that compares the registered schema with the checked-in
-   one, same CDC log contract as Phase 2.
+   one, same CDC log contract as Phase 1, and `make proto` to recompile the descriptor.
 3. **CDC-to-current merger** (`feat/merger`): `cdc-demo merge` (batch, re-runnable), the current
    table, the watermark control table, unit tests for dedup and MERGE on temp Delta tables, and
    `make demo` extended to assert the current table equals Postgres row by row.
