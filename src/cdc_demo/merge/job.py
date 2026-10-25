@@ -10,11 +10,11 @@ from typing import Any
 from delta.tables import DeltaTable
 from pyspark.sql import DataFrame, SparkSession, Window
 from pyspark.sql import functions as F
-from pyspark.sql.types import StructType
 
 from cdc_demo.logging import log_event
 from cdc_demo.merge.schemas import CURRENT_SCHEMA, MERGE_RUNS_SCHEMA, WATERMARK_SCHEMA
 from cdc_demo.settings import LakeSettings
+from cdc_demo.spark.tables import create_table
 
 log = logging.getLogger(__name__)
 
@@ -64,23 +64,7 @@ def create_tables(spark: SparkSession, lake: LakeSettings) -> None:
         (lake.merge_watermark, WATERMARK_SCHEMA),
         (lake.merge_runs, MERGE_RUNS_SCHEMA),
     ):
-        _create(spark, path, schema)
-
-
-def _create(spark: SparkSession, path: str, schema: StructType) -> None:
-    builder = DeltaTable.createIfNotExists(spark).location(_qualified_local(path))
-    builder.addColumns(schema).execute()
-
-
-def _qualified_local(path: str) -> str:
-    """`file:///x` as Hadoop qualifies it (`file:/x`).
-
-    A path-based CREATE TABLE fails with DELTA_AMBIGUOUS_PATHS_IN_CREATE_TABLE unless the
-    qualified location ends with the path as given, and `file:/x` does not end with `file:///x`.
-    `s3a://` and plain paths already qualify to a string that ends with themselves.
-    """
-    prefix = "file:///"
-    return "file:/" + path.removeprefix(prefix) if path.startswith(prefix) else path
+        create_table(spark, path, schema)
 
 
 def _read_watermark(spark: SparkSession, lake: LakeSettings) -> Offsets:
