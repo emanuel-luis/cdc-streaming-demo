@@ -83,5 +83,5 @@ def test_warehouse_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DBT_PROJECT_DIR", "/opt/dbt")
     wh = WarehouseSettings()
     assert wh.path == Path("/warehouse/analytics.duckdb")
-    assert wh.staging_path == Path("/warehouse/analytics.build.duckdb")
+    assert wh.staging_path == Path("/warehouse/analytics_build.duckdb")
     assert wh.dbt_project_dir == "/opt/dbt"

@@ -119,7 +119,9 @@ class WarehouseSettings(BaseSettings):
 
     @property
     def staging_path(self) -> Path:
-        return Path(self.warehouse_dir) / "analytics.build.duckdb"
+        # One dot only: DuckDB names the catalog after the stem up to the first dot, dbt-duckdb
+        # after os.path.splitext; "analytics.build" would make the two disagree.
+        return Path(self.warehouse_dir) / "analytics_build.duckdb"
 
 
 class KafkaSettings(BaseSettings):
