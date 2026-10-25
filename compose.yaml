@@ -7,6 +7,9 @@
 #   spark-job 2.4 GB (both Spark containers grow toward their limit, see the README),
 #   connect 1.03 GB, kafka 0.67 GB, schema-registry 0.40 GB, analytics 0.19 GB, s3 0.17 GB,
 #   postgres 0.07 GB, dashboard 0.05 GB, mutator 0.04 GB.
+# Profile `mssql` (phase 5; run it instead of the Debezium path, never next to it): mssql 2g
+#   (server memory capped at 1536 MB), mssql-consumer 2560m, mssql-job 2560m, mssql-init 256m
+#   (runs once). Peaks: [to be measured] by `make mssql-demo` and `make stats`.
 name: cdc-streaming-demo
 
 x-app-env: &app-env
@@ -26,6 +29,20 @@ x-app-env: &app-env
   POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cdc_owner_pw}
   SPARK_MASTER: ${SPARK_MASTER:-local[2]}
   SPARK_DRIVER_MEMORY: ${SPARK_DRIVER_MEMORY:-1g}
+
+# The SQL Server path (profile `mssql`): same lake, a separate root, its own consumer app id.
+x-mssql-env: &mssql-env
+  <<: *app-env
+  LAKE_ROOT: s3a://cdc-demo/mssql
+  CONSUMER_APP_ID: orders-mssql-consumer-v1
+  CONSUMER_TRIGGER_INTERVAL: ${CONSUMER_TRIGGER_INTERVAL:-10 seconds}
+  SQLSERVER_HOST: mssql
+  SQLSERVER_PORT: "1433"
+  SQLSERVER_DB: ${SQLSERVER_DB:-cdc_demo}
+  SQLSERVER_USER: ${SQLSERVER_USER:-cdc_owner}
+  SQLSERVER_PASSWORD: ${SQLSERVER_PASSWORD:-Cdc_owner_pw1!}
+  SQLSERVER_CDC_USER: ${SQLSERVER_CDC_USER:-cdc_reader}
+  SQLSERVER_CDC_PASSWORD: ${SQLSERVER_CDC_PASSWORD:-Cdc_reader_pw1!}
 
 services:
   postgres:
@@ -349,6 +366,96 @@ services:
       - "127.0.0.1:${KAFKA_UI_PORT:-8090}:8080"
     networks: [demo]
 
+  mssql:
+    # SQL Server 2022 Developer with the Agent (CDC capture is an Agent job). amd64 only.
+    # Running this profile means accepting Microsoft's SQL Server EULA: set MSSQL_ACCEPT_EULA=Y
+    # yourself; there is no default.
+    image: mcr.microsoft.com/mssql/server:2022-CU27-GDR1-ubuntu-22.04
+    platform: linux/amd64
+    mem_limit: 2g
+    profiles: [mssql]
+    environment:
+      ACCEPT_EULA: ${MSSQL_ACCEPT_EULA:-}
+      MSSQL_PID: Developer
+      MSSQL_AGENT_ENABLED: "true"
+      # sqlservr refuses to start with less than about 2000 MB visible; it stays below the limit.
+      MSSQL_MEMORY_LIMIT_MB: "1536"
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:-Cdc_sa_pw_1!}
+      TZ: UTC
+    ports:
+      - "127.0.0.1:${SQLSERVER_PORT:-1433}:1433"
+    volumes:
+      - mssql_data:/var/opt/mssql
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -Q 'SELECT 1' -b -o /dev/null"
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    networks: [demo]
+
+  mssql-init:
+    # Database, table, seed rows, CDC and logins (mssql/init/01_setup.sql). Idempotent.
+    image: mcr.microsoft.com/mssql/server:2022-CU27-GDR1-ubuntu-22.04
+    platform: linux/amd64
+    mem_limit: 256m
+    profiles: [mssql]
+    depends_on:
+      mssql:
+        condition: service_healthy
+    entrypoint: ["/opt/mssql-tools18/bin/sqlcmd"]
+    command: ["-C", "-S", "mssql", "-U", "sa", "-b", "-i", "/init/01_setup.sql"]
+    environment:
+      SQLCMDPASSWORD: ${MSSQL_SA_PASSWORD:-Cdc_sa_pw_1!}
+      SQLSERVER_DB: ${SQLSERVER_DB:-cdc_demo}
+      SQLSERVER_USER: ${SQLSERVER_USER:-cdc_owner}
+      SQLSERVER_PASSWORD: ${SQLSERVER_PASSWORD:-Cdc_owner_pw1!}
+      SQLSERVER_CDC_USER: ${SQLSERVER_CDC_USER:-cdc_reader}
+      SQLSERVER_CDC_PASSWORD: ${SQLSERVER_CDC_PASSWORD:-Cdc_reader_pw1!}
+    volumes:
+      - ./mssql/init:/init:ro
+    restart: "no"
+    networks: [demo]
+
+  mssql-consumer:
+    # Runs the image built by `consumer` (`make mssql-demo` builds it): snapshot once, then
+    # the mssql_cdc streaming source into the CDC log under s3a://cdc-demo/mssql.
+    image: cdc-demo-spark:local
+    pull_policy: never
+    mem_limit: 2560m
+    profiles: [mssql]
+    command: ["consume-mssql"]
+    depends_on:
+      mssql-init:
+        condition: service_completed_successfully
+      s3-init:
+        condition: service_completed_successfully
+    environment:
+      <<: *mssql-env
+    restart: on-failure
+    networks: [demo]
+
+  mssql-job:
+    # One-shot commands on the SQL Server lake: mutate --target mssql, verify, merge, lag-report.
+    image: cdc-demo-spark:local
+    pull_policy: never
+    mem_limit: 2560m
+    profiles: [mssql]
+    depends_on:
+      mssql-init:
+        condition: service_completed_successfully
+      s3-init:
+        condition: service_completed_successfully
+    environment:
+      <<: *mssql-env
+    volumes:
+      - demo_runs:/runs
+    healthcheck:
+      disable: true
+    networks: [demo]
+
 networks:
   demo:
     driver: bridge
@@ -359,3 +466,4 @@ volumes:
   s3_data:
   demo_runs:
   warehouse:
+  mssql_data:

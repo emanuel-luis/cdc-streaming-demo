@@ -1,7 +1,7 @@
 SHELL := bash
 .DEFAULT_GOAL := help
 
-.PHONY: help install lint fmt proto test-fast test-spark test up down demo merge marts dashboard ps logs ui
+.PHONY: help install lint fmt proto test-fast test-spark test up down demo mssql-demo lag stats merge marts dashboard ps logs ui
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-12s %s\n", $$1, $$2}'
@@ -36,10 +36,24 @@ up: ## Build every image (tools profile included) and start the stack in the bac
 	docker compose up -d --wait
 
 down: ## Stop the stack and delete its volumes
-	docker compose --profile tools --profile ui down -v --remove-orphans
+	docker compose --profile tools --profile ui --profile mssql down -v --remove-orphans
 
 demo: ## End-to-end demo on fresh volumes
 	bash scripts/demo.sh
+
+mssql-demo: ## SQL Server path end to end (needs MSSQL_ACCEPT_EULA=Y; see README)
+	bash scripts/mssql-demo.sh
+
+# Picks the stack that is up: the SQL Server one when its server runs, otherwise Debezium's.
+lag: ## p50, p95 and max lag of the running stack's CDC log
+	@if docker compose --profile mssql ps --status running --services | grep -qx mssql; then \
+		docker compose --profile mssql run --rm mssql-job lag-report; \
+	else \
+		docker compose run --rm spark-job lag-report; \
+	fi
+
+stats: ## Memory use of every running container (one sample)
+	docker stats --no-stream --format 'table {{.Name}}\t{{.MemUsage}}\t{{.MemPerc}}'
 
 merge: ## Merge the CDC log into the current table (stack must be up)
 	docker compose run --rm spark-job merge
