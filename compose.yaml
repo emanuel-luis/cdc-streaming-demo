@@ -24,11 +24,6 @@ x-app-env: &app-env
   SPARK_MASTER: ${SPARK_MASTER:-local[2]}
   SPARK_DRIVER_MEMORY: ${SPARK_DRIVER_MEMORY:-1g}
 
-x-spark-build: &spark-build
-  context: .
-  dockerfile: docker/app.Dockerfile
-  target: spark
-
 services:
   postgres:
     image: postgres:18.6-alpine
@@ -209,7 +204,11 @@ services:
     networks: [demo]
 
   consumer:
-    build: *spark-build
+    # The only service that builds the spark image; spark-job runs the same tag.
+    build:
+      context: .
+      dockerfile: docker/app.Dockerfile
+      target: spark
     image: cdc-demo-spark:local
     mem_limit: 2560m
     command: ["consume"]
@@ -253,8 +252,11 @@ services:
     networks: [demo]
 
   spark-job:
-    build: *spark-build
+    # Runs the image built by `consumer` (`make up` / `make demo` build it). Two services
+    # building one tag export it twice in parallel, and the containerd image store fails that
+    # build with "parent snapshot ... does not exist".
     image: cdc-demo-spark:local
+    pull_policy: never
     mem_limit: 2g
     profiles: [tools]
     depends_on:

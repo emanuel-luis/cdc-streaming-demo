@@ -154,7 +154,8 @@ Containers:
   non-root user, entrypoint `cdc-demo`.
 - Compose services: `postgres`, `kafka`, `schema-registry`, `connect`, `connector-init`
   (one-shot), `s3`, `s3-init` (one-shot), `consumer` (long-running, `restart: on-failure`),
-  `mutator` and `spark-job` (profile `tools`, used through `docker compose run --rm`),
+  `mutator` and `spark-job` (profile `tools`, used through `docker compose run --rm`; `spark-job`
+  runs the image `consumer` builds, so one build exports it),
   `kafka-ui` (profile `ui`). Shared named volume `demo_runs` mounted at `/runs` for manifests.
 - Broker auto topic creation is off; the connector creates its topic through
   `topic.creation.default.*` (1 partition, replication 1).
