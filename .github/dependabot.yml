@@ -16,7 +16,7 @@ updates:
       python:
         patterns: ["*"]
     ignore:
-      # dbt-common needs protobuf<7, which caps grpcio-tools below 1.83 (decision 34).
+      # dbt-common needs protobuf<7, which caps grpcio-tools below 1.83 (decision 35).
       - dependency-name: grpcio-tools
         versions: [">=1.83"]
       - dependency-name: protobuf

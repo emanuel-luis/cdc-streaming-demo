@@ -23,7 +23,7 @@ QUERY_NAME = "orders_cdc_log"
 
 
 def create_tables(spark: SparkSession, lake: LakeSettings) -> None:
-    """Decision 36: the rejects table would otherwise exist only after the first reject."""
+    """Decision 39: the rejects table would otherwise exist only after the first reject."""
     create_table(spark, lake.cdc_log, CDC_LOG_SCHEMA, ["_partition_date"])
     create_table(spark, lake.rejects, REJECTS_SCHEMA, ["_partition_date"])
     create_table(spark, lake.ingest_runs, INGEST_RUNS_SCHEMA)
