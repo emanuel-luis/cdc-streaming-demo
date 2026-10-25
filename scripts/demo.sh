@@ -24,7 +24,7 @@ on_error() {
 trap on_error ERR
 
 banner "Removing any previous stack and its volumes"
-docker compose down -v --remove-orphans
+docker compose --profile tools --profile ui down -v --remove-orphans
 
 banner "Building images and starting the stack"
 docker compose up -d --build --wait

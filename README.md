@@ -111,15 +111,18 @@ Ports are the defaults; change any of them in `.env` (copy `.env.example`).
 
 ### Memory budget
 
-Every long-running service has a memory limit in `compose.yaml`, sized for a 16 GB laptop:
+Every long-running service has a memory limit in `compose.yaml`, sized for a 16 GB laptop
+(peaks measured during `make demo`):
 
-| Service | Limit |
-| --- | --- |
-| postgres | 256 MB |
-| kafka | 1 GB (heap 512 MB) |
-| connect | 1 GB (heap 512 MB) |
-| s3 | 512 MB |
-| consumer (Spark driver 1 GB) | 2 GB |
+| Service | Limit | Measured peak |
+| --- | --- | --- |
+| postgres | 256 MB | 53 MB |
+| kafka | 1 GB (heap 512 MB) | 560 MB |
+| connect | 1.25 GB (heap 512 MB) | 840 MB |
+| s3 | 512 MB | 190 MB |
+| consumer (Spark driver 1 GB) | 2.5 GB | 1.7 GB |
+
+`verify` runs in a short-lived `spark-job` container limited to 2 GB.
 
 ## Design notes
 

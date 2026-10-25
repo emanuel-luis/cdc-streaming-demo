@@ -1,7 +1,8 @@
-# Memory limits (long-running services; target total under 6 GB):
-#   postgres 256m | kafka 1g (heap 512m) | connect 1g (heap 512m) | s3 512m | consumer 2g (driver 1g)
-#   = 4.75 GB. On demand: kafka-ui 512m (profile ui), mutator 256m and spark-job 2g (profile tools),
-#   curl init containers 64m each.
+# Memory limits (long-running services; target total under 6 GB). Measured peaks during `make demo`:
+#   consumer 1.7 GB, connect 0.85 GB, kafka 0.56 GB, s3 0.19 GB, postgres 0.05 GB.
+#   postgres 256m | kafka 1g (heap 512m) | connect 1280m (heap 512m) | s3 512m |
+#   consumer 2560m (driver 1g) = 5.5 GB. On demand: kafka-ui 512m (profile ui), mutator 256m and
+#   spark-job 2g (profile tools), curl init containers 64m each.
 name: cdc-streaming-demo
 
 x-app-env: &app-env
@@ -84,7 +85,7 @@ services:
 
   connect:
     image: quay.io/debezium/connect:3.7.0.Final
-    mem_limit: 1g
+    mem_limit: 1280m
     depends_on:
       kafka:
         condition: service_healthy
@@ -175,7 +176,7 @@ services:
   consumer:
     build: *spark-build
     image: cdc-demo-spark:local
-    mem_limit: 2g
+    mem_limit: 2560m
     command: ["consume"]
     depends_on:
       kafka:
