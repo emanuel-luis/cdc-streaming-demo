@@ -31,6 +31,18 @@ All notable changes to this project are documented here. The format follows
 - `cdc-demo verify-current`: compares the current table with Postgres row by row.
 - `make merge`; `make demo` runs the merge twice (the second run must change nothing) and
   verifies the current table against Postgres.
+- `cdc-demo build-marts`: `dbt build` over the Delta tables with dbt-duckdb (DuckDB's `delta`
+  extension reads them in place from S3) into a staging DuckDB file that is renamed over
+  `analytics.duckdb` only when every model and test passed.
+- `dbt/`: staging views and four marts (`dim_orders_current`, `fct_order_status_changes`,
+  `fct_order_activity_hourly`, `fct_pipeline_runs`) with enforced contracts, generic and
+  singular tests, including a recomputation of the current table from the CDC log.
+- `cdc-demo verify-marts`: checks the marts against the mutator manifest.
+- `dashboard/app.py`: read-only Streamlit dashboard (`make dashboard`).
+- `analytics` image target, `analytics` and `dashboard` compose services, `warehouse` volume;
+  `make marts`; `make demo` now has 10 steps and ends with `build-marts` and `verify-marts`.
+- `dbt parse` in `make lint` and in the CI lint job; Dependabot ignores for the dbt and DuckDB
+  minor versions and for the protobuf and grpcio-tools lines.
 
 ### Changed
 
@@ -38,6 +50,11 @@ All notable changes to this project are documented here. The format follows
   The CDC log, rejects and run metadata tables keep their schemas.
 - Reject reasons: `unparseable_json` is replaced by `invalid_wire_header` and
   `unparseable_protobuf`; `raw_value` in the rejects table is now the base64 of the value bytes.
+- The consumer creates the CDC log, the rejects table and `ingest_runs` at startup, so the
+  rejects table exists before the first reject. The create helper moved to
+  `cdc_demo.spark.tables`.
+- Dev group: `grpcio-tools>=1.80,<1.83` and `protobuf>=6.33.5,<7` (dbt-common needs
+  protobuf below 7).
 - Kafka UI is configured with the registry; the stack's memory budget includes Schema Registry.
 
 ### Removed

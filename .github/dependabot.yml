@@ -15,6 +15,19 @@ updates:
     groups:
       python:
         patterns: ["*"]
+    ignore:
+      # dbt-common needs protobuf<7, which caps grpcio-tools below 1.83 (decision 35).
+      - dependency-name: grpcio-tools
+        versions: [">=1.83"]
+      - dependency-name: protobuf
+        update-types: ["version-update:semver-major"]
+      # The warehouse stack moves as one tested set (decision 34).
+      - dependency-name: duckdb
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: dbt-core
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: dbt-duckdb
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
 
   - package-ecosystem: docker
     directory: /docker

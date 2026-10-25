@@ -1,0 +1,24 @@
+version: 2
+
+sources:
+  - name: lake
+    description: Delta tables the consumer and the merger write, read in place with delta_scan.
+    tables:
+      - name: orders_cdc_log
+        meta:
+          external_location: "delta_scan('{{ var('lake_root') }}/raw/orders_cdc_log')"
+      - name: orders_current
+        meta:
+          external_location: "delta_scan('{{ var('lake_root') }}/current/orders')"
+      - name: rejects
+        meta:
+          external_location: "delta_scan('{{ var('lake_root') }}/raw/_rejects/orders_cdc_log')"
+      - name: ingest_runs
+        meta:
+          external_location: "delta_scan('{{ var('lake_root') }}/_meta/ingest_runs')"
+      - name: merge_runs
+        meta:
+          external_location: "delta_scan('{{ var('lake_root') }}/_meta/merge_runs')"
+      - name: merge_watermark
+        meta:
+          external_location: "delta_scan('{{ var('lake_root') }}/_meta/merge_watermark')"

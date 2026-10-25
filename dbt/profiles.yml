@@ -1,0 +1,23 @@
+# One target. The build writes to the file in DBT_DUCKDB_PATH (a staging file that
+# `cdc-demo build-marts` renames when the build passes); the lake is read over S3 with the
+# same S3_* variables as the rest of the stack. No secret is stored here.
+cdc_demo:
+  target: lake
+  outputs:
+    lake:
+      type: duckdb
+      path: "{{ env_var('DBT_DUCKDB_PATH', 'target/analytics.duckdb') }}"
+      threads: 2
+      extensions: [httpfs, delta]
+      settings:
+        TimeZone: UTC
+        memory_limit: 512MB
+      secrets:
+        - type: s3
+          provider: config
+          key_id: "{{ env_var('S3_ACCESS_KEY', 'cdc_demo_admin') }}"
+          secret: "{{ env_var('S3_SECRET_KEY', 'cdc_demo_secret') }}"
+          region: "{{ env_var('S3_REGION', 'us-east-1') }}"
+          endpoint: "{{ env_var('S3_ENDPOINT', 'http://localhost:9000') | replace('https://', '') | replace('http://', '') }}"
+          url_style: path
+          use_ssl: "{{ 'true' if env_var('S3_ENDPOINT', 'http://localhost:9000').startswith('https://') else 'false' }}"
