@@ -55,7 +55,7 @@ Lake on S3-compatible storage. Public portfolio repo; all data is synthetic.
   MERGE commits, and the MERGE updates a row only when the event is newer than the stored one
   by `(source_lsn, kafka_offset)`. The merger reads the CDC log once, at a pinned version.
 - The warehouse file `analytics.duckdb` is written only by `cdc-demo build-marts`: dbt builds
-  into `analytics.build.duckdb` and the file is renamed into place after `dbt build` passed.
+  into `analytics_build.duckdb` and the file is renamed into place after `dbt build` passed.
   Nothing else opens it for writing; the dashboard opens it read-only. DuckDB reads the lake
   through `s3://` (never `s3a://`, whose secrets it ignores): use `LakeSettings.duckdb_root`.
 - `cdc_demo.cli`, `settings`, `logging`, `mutator` and `contract` never import pyspark, duckdb,

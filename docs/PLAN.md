@@ -139,7 +139,7 @@ Merge run, in order:
 7. Append the run row and log one `merge_finished` JSON line.
 
 Warehouse (Phase 4). DuckDB file `<WAREHOUSE_DIR>/analytics.duckdb`; dbt builds into
-`analytics.build.duckdb` next to it and `cdc-demo build-marts` renames it over the published
+`analytics_build.duckdb` next to it and `cdc-demo build-marts` renames it over the published
 file after `dbt build` passed (decision 40). Schemas `staging` (views) and `marts` (tables with
 enforced contracts). The lake is read with `delta_scan('<lake root>/<path>')`, where the lake
 root is `LAKE_ROOT` with `s3a://` replaced by `s3://` (decision 37).
