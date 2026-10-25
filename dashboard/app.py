@@ -62,7 +62,7 @@ def main() -> None:
         st.subheader("CDC events per hour")
         hourly = q(
             f"select activity_hour::timestamp, op, events from {MARTS}.fct_order_activity_hourly "
-            "order by 1"
+            "where activity_hour is not null order by 1"
         )
         st.bar_chart(_hourly(hourly))
 
