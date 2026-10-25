@@ -92,14 +92,33 @@ def verify(
     raise typer.Exit(code)
 
 
+@app.command()
+def check_schema() -> None:
+    """Compare the checked-in Protobuf schema with the registered one; exit 1 on any difference."""
+    from cdc_demo.contract import RegistryError, format_report
+    from cdc_demo.contract import check_schema as run_check
+    from cdc_demo.settings import SchemaRegistrySettings
+
+    settings = SchemaRegistrySettings()
+    try:
+        result = run_check(settings.schema_registry_url, settings.value_subject)
+    except RegistryError as exc:
+        typer.echo(f"schema registry check failed: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(format_report(result))
+    raise typer.Exit(0 if result.ok else 1)
+
+
 @app.command(hidden=True)
 def spark_warmup() -> None:
-    """Resolve every Spark package (Delta, Kafka, hadoop-aws) so Ivy caches the jars."""
+    """Resolve every Spark package (Delta, Kafka, Protobuf, hadoop-aws) so Ivy caches the jars."""
     from cdc_demo.settings import SparkSettings
     from cdc_demo.spark.session import build_session
 
     configure_logging()
-    build_session(SparkSettings(), kafka=True, hadoop_aws=True, app_name="cdc-demo-warmup").stop()
+    build_session(
+        SparkSettings(), kafka=True, protobuf=True, hadoop_aws=True, app_name="cdc-demo-warmup"
+    ).stop()
 
 
 def _s3_for(lake: LakeSettings) -> S3Settings | None:
