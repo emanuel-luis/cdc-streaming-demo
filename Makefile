@@ -30,8 +30,9 @@ test-spark: ## Spark tests (local session)
 
 test: test-fast test-spark ## Everything
 
-up: ## Start the stack in the background
-	docker compose up -d --build --wait
+up: ## Build every image (tools profile included) and start the stack in the background
+	docker compose --profile tools build
+	docker compose up -d --wait
 
 down: ## Stop the stack and delete its volumes
 	docker compose --profile tools --profile ui down -v --remove-orphans
