@@ -1,9 +1,11 @@
-# Memory limits (long-running services; target total under 6 GB). Measured peaks during `make demo`:
-#   consumer 1.7 GB, connect 0.85 GB, kafka 0.56 GB, s3 0.19 GB, postgres 0.05 GB (Phase 1 numbers;
-#   schema-registry not measured yet).
+# Memory limits, sized for a 16 GB laptop (long-running services: 6.0 GB in total):
 #   postgres 256m | kafka 1g (heap 512m) | schema-registry 512m (heap 256m) |
-#   connect 1280m (heap 512m) | s3 512m | consumer 2560m (driver 1g) = 6.0 GB. On demand: kafka-ui 512m (profile ui), mutator 256m and
-#   spark-job 2g (profile tools), curl init containers 64m each.
+#   connect 1280m (heap 512m) | s3 512m | consumer 2560m (driver 1g).
+# On demand: spark-job 2560m and mutator 256m (profile tools), kafka-ui 512m (profile ui),
+#   curl init containers 64m each.
+# Peaks measured during `make demo` on 2026-10-25: consumer 2.1 GB, spark-job 2.0 GB (under
+#   the old 2 GB limit), connect 1.03 GB, kafka 0.64 GB, schema-registry 0.34 GB,
+#   s3 0.14 GB, postgres 0.07 GB, mutator 0.04 GB.
 name: cdc-streaming-demo
 
 x-app-env: &app-env
