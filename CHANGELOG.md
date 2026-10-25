@@ -17,3 +17,22 @@ All notable changes to this project are documented here. The format follows
 - `cdc-demo verify` and `make demo`: end-to-end assertions against the manifest and Postgres.
 - CI (lint, unit, Spark tests, compose smoke), security workflow (pip-audit, zizmor) and
   Dependabot.
+- Schema Registry (Confluent 8.3.2) and a Connect image with Confluent's Protobuf converter;
+  Debezium now writes Protobuf values and keys.
+- `src/cdc_demo/proto/`: the checked-in value schema (`orders_value.proto`) and its compiled
+  descriptor set; `make proto` regenerates it (`grpcio-tools` and `protobuf` in the dev group).
+- `cdc-demo check-schema`: compatibility check against the registry plus a text comparison;
+  `make demo` runs it before the mutations.
+- `spark-protobuf` package for the consumer and the Ivy warmup.
+
+### Changed
+
+- The consumer decodes Confluent-framed Protobuf with `from_protobuf` instead of parsing JSON.
+  The CDC log, rejects and run metadata tables keep their schemas.
+- Reject reasons: `unparseable_json` is replaced by `invalid_wire_header` and
+  `unparseable_protobuf`; `raw_value` in the rejects table is now the base64 of the value bytes.
+- Kafka UI is configured with the registry; the stack's memory budget includes Schema Registry.
+
+### Removed
+
+- The Debezium JSON envelope schema (`ENVELOPE_SCHEMA`) in the consumer.
