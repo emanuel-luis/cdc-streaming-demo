@@ -40,9 +40,14 @@ flowchart LR
         SSS --> RAW[(raw/orders_cdc_log<br/>append-only Delta)]
         SSS --> REJ[(raw/_rejects)]
         SSS --> RUNS[(_meta/ingest_runs)]
+        RAW --> MRG[cdc-demo merge<br/>batch, re-runnable]
+        MRG --> CUR[(current/orders<br/>one row per live order)]
+        MRG --> WM[(_meta/merge_watermark<br/>_meta/merge_runs)]
     end
     RAW -. verify .-> CHECK{{cdc-demo verify}}
     PG -. verify .-> CHECK
+    CUR -. verify-current .-> CHECK2{{cdc-demo verify-current}}
+    PG -. verify-current .-> CHECK2
 ```
 
 | Layer | Lives in | Contents |
@@ -52,9 +57,10 @@ flowchart LR
 | Raw | Delta `s3a://cdc-demo/raw/orders_cdc_log` | One row per change event, never updated; partitioned by event date |
 | Raw rejects | Delta `s3a://cdc-demo/raw/_rejects/orders_cdc_log` | Events that broke the contract, with the reason and Kafka coordinates |
 | Run metadata | Delta `s3a://cdc-demo/_meta/ingest_runs` | One row per micro-batch: run id, batch id, counts, offset range |
+| Processed | Delta `s3a://cdc-demo/current/orders` | One row per live order, the latest state; written only by `cdc-demo merge` |
+| Merger control | Delta `s3a://cdc-demo/_meta/merge_watermark`, `_meta/merge_runs` | Last merged Kafka offset per partition; one row per merge run |
 
-The processed layer (a current-state table built with MERGE) and the serving layer (dbt models
-and a dashboard) are the next phases; see [Roadmap](#roadmap).
+The serving layer (dbt models and a dashboard) is the next phase; see [Roadmap](#roadmap).
 
 ## Tech stack
 
@@ -95,7 +101,7 @@ Ports are the defaults; change any of them in `.env` (copy `.env.example`).
    curl -s localhost:8081/subjects/cdc.public.orders-value/versions/latest
    ```
 
-   The messages are binary Protobuf now, so the console shows raw bytes. Kafka UI (step 5) is
+   The messages are binary Protobuf now, so the console shows raw bytes. Kafka UI (step 6) is
    configured with the registry to browse the schema subjects.
 3. **Change the source.** The mutator advances order statuses, edits amounts, inserts and
    deletes, one transaction per change, and writes a manifest of what it did:
@@ -112,7 +118,20 @@ Ports are the defaults; change any of them in `.env` (copy `.env.example`).
    ```
 
    `verify` assumes a fresh stack with one mutator run, which is what `make demo` sets up.
-5. **Optional UI.** `make ui` starts Kafka UI at <http://localhost:8090> (topics, decoded messages,
+5. **Merge into the current table.** `merge` reads the CDC log events above the watermark,
+   keeps the latest event per order and applies them with a Delta MERGE. Run it twice: the
+   second run reports 0 inserted, updated and deleted. `verify-current` then compares the
+   current table with Postgres row by row and exits 1 on any difference:
+
+   ```bash
+   docker compose run --rm spark-job merge
+   docker compose run --rm spark-job merge
+   docker compose run --rm spark-job verify-current
+   ```
+
+   Mutate again and merge again to see only the new events picked up. Every run is recorded in
+   `_meta/merge_runs` with the CDC log version it read and the MERGE row counts.
+6. **Optional UI.** `make ui` starts Kafka UI at <http://localhost:8090> (topics, decoded messages,
    the schema subjects, the Connect cluster). The Spark UI of the running consumer is at <http://localhost:4040>.
 
 ### Memory budget
@@ -165,6 +184,16 @@ as the consumer. With the consumer and a `spark-job` running, the stack used abo
   header or a payload that does not decode go to the rejects table (base64 of the value).
   Proto3 scalars at their zero value decode as null.
 
+- **The current table and its watermark.** `cdc-demo merge` is a batch job. It pins the latest
+  version of the CDC log and reads it once with `versionAsOf`, because the consumer keeps
+  appending and two reads could see different data. From that single read it takes the events
+  above the watermark (the last merged Kafka offset per partition, in a Delta control table),
+  keeps one event per order ordered by `(source_lsn, kafka_offset)`, and runs a MERGE that
+  updates a row only when the incoming event is newer than the stored one. The watermark moves
+  after the MERGE commits, using the highest offsets of that same read. A crash between the two
+  steps is harmless: the re-run reads the same events and the newer-than guard turns them into
+  no-ops. A delete event removes the row; the CDC log keeps the history.
+
 Every decision and its reason is logged in [docs/DECISIONS.md](docs/DECISIONS.md); the build
 plan is in [docs/PLAN.md](docs/PLAN.md).
 
@@ -176,7 +205,7 @@ docker/                   mutator and Spark images (jars baked at build time), C
 postgres/initdb/          schema, seeded data, replication role, publication
 debezium/                 connector configuration
 scripts/                  connector registration, bucket creation, demo orchestration
-src/cdc_demo/             the cdc-demo CLI: mutator, Spark ingest, verify, check-schema
+src/cdc_demo/             the cdc-demo CLI: mutator, Spark ingest, merge, verify, check-schema
 src/cdc_demo/proto/       the Protobuf contract: .proto and compiled descriptor set
 tests/                    unit and property tests; Spark tests behind the `spark` marker
 docs/                     plan and decision log
@@ -196,7 +225,7 @@ make test-spark   # Spark tests (Linux, macOS, WSL or CI; needs Java 17)
 
 - [x] Minimum shippable: compose stack, mutator, raw CDC log in Delta, end-to-end check
 - [x] Protobuf on the wire with Confluent Schema Registry and a schema contract test
-- [ ] Current-state table: incremental MERGE from the CDC log with an offset watermark
+- [x] Current-state table: incremental MERGE from the CDC log with an offset watermark
 - [ ] dbt (DuckDB) staging and marts, and a Streamlit dashboard
 - [ ] Two ways to do CDC: SQL Server CDC read directly by Spark with
       [mssql-cdc-pyspark](https://github.com/emanuel-luis/mssql-cdc-pyspark), compared with

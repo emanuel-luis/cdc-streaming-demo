@@ -13,7 +13,8 @@ Decisions and their reasons live in [DECISIONS.md](DECISIONS.md).
 | Raw (landing) | Delta `s3a://cdc-demo/raw/orders_cdc_log` | Append-only CDC log, one row per change event, never updated | `cdc-demo consume` |
 | Raw rejects | Delta `s3a://cdc-demo/raw/_rejects/orders_cdc_log` | Events that broke the contract, with the reason and Kafka coordinates | `cdc-demo consume` |
 | Run metadata | Delta `s3a://cdc-demo/_meta/ingest_runs` | One row per micro-batch: run id, batch id, counts, offsets, UTC times | `cdc-demo consume` |
-| Processed (current) | Delta `s3a://cdc-demo/current/orders` | One row per live order: latest state (Phase 3) | `cdc-demo merge` |
+| Processed (current) | Delta `s3a://cdc-demo/current/orders` | One row per live order: latest state | `cdc-demo merge` |
+| Merger control | Delta `s3a://cdc-demo/_meta/merge_watermark`, `_meta/merge_runs` | Watermark per partition; one row per merge run | `cdc-demo merge` |
 | Serving | DuckDB file built by dbt | `stg_orders`, `dim_orders_current`, `fct_order_status_changes` (Phase 5) | `dbt build` |
 | Presentation | Streamlit | Status mix, revenue, recent transitions (Phase 5) | dashboard |
 
@@ -31,7 +32,7 @@ postgres/initdb/             # schema, seed (seeded random), CDC role, publicati
 debezium/orders-connector.json
 scripts/                     # register-connector.sh, demo.sh, wait helpers, compile_proto.py
 src/cdc_demo/                # one package, uv_build backend, py.typed
-  cli.py                     # Typer app: mutate, consume, verify, check-schema (+ merge later)
+  cli.py                     # Typer app: mutate, consume, verify, check-schema, merge, verify-current
   settings.py                # pydantic-settings, one class per component, env prefixes
   logging.py                 # structured log lines (run_id, batch_id, counts)
   mutator/                   # status machine, op selection, SQL, manifest
@@ -39,7 +40,9 @@ src/cdc_demo/                # one package, uv_build backend, py.typed
   contract.py                # check-schema: checked-in .proto vs Schema Registry (stdlib only)
   proto/                     # orders_value.proto (registry text) + orders_value.desc (compiled)
   ingest/                    # table schemas, parse + validate, foreachBatch writer
+  merge/                     # current table + control table schemas, run_merge (Phase 3)
   verify.py                  # end-to-end assertions used by make demo
+  verify_current.py          # current table vs Postgres, row by row
 tests/                       # unit (no JVM), spark-marked, integration-marked
 docs/                        # PLAN.md, DECISIONS.md
 .github/workflows/           # ci.yml, security.yml; dependabot.yml
@@ -95,6 +98,41 @@ Validation: a row is rejected, with one of these reasons, when
 Rejects keep the coordinates and the reason; `raw_value` is the base64 of the Kafka value
 bytes (decision 24).
 
+Current table (Delta `current/orders`, unpartitioned, one row per live order; decision 28):
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| order_id | BIGINT NOT NULL | merge key |
+| customer_id, status, amount, created_at, updated_at | INT, STRING, DECIMAL(12,2), TIMESTAMP, TIMESTAMP | as in Postgres |
+| _source_lsn | BIGINT | LSN of the event that produced the row |
+| _kafka_partition, _kafka_offset | INT, BIGINT | coordinates of that event |
+| _event_id, _op | STRING | event id and op (c, u, r) of that event |
+| _merged_at, _merge_run_id | TIMESTAMP, STRING | when and by which run the row was last written |
+
+Watermark (`_meta/merge_watermark`): `kafka_topic STRING, kafka_partition INT, last_offset
+BIGINT, updated_at TIMESTAMP, run_id STRING`, one row per topic and partition.
+
+Merge runs (`_meta/merge_runs`, one row per run, appended last): `run_id, started_at,
+finished_at, cdc_log_version, events_read, distinct_orders, rows_inserted, rows_updated,
+rows_deleted, watermark_before, watermark_after`. The watermarks are JSON strings
+`{"<topic>:<partition>": offset}`. `cdc_log_version` is null when the CDC log does not exist
+yet; the row counts come from the MERGE operation metrics in the current table's history and
+are 0 when no MERGE ran.
+
+Merge run, in order:
+
+1. Create the three tables from explicit schemas if missing.
+2. Pin the latest CDC log version and read it once with `versionAsOf`.
+3. Keep events with `kafka_offset` above the watermark of their topic and partition (broadcast
+   join; no watermark row means read everything).
+4. Keep one event per `order_id`, latest by `(source_lsn, kafka_offset)`.
+5. MERGE on `order_id`. Matched and the event is newer
+   (`s.source_lsn > t._source_lsn` or equal LSN and a higher offset): delete on `d`, update on
+   c/u/r. Not matched: insert on c/u/r, nothing on `d`.
+6. After the MERGE commits, upsert the watermark with the highest offset per partition of the
+   same read.
+7. Append the run row and log one `merge_finished` JSON line.
+
 ## Runtime contract (Phase 1-2)
 
 The Python package and the container stack meet here; change both sides together.
@@ -146,6 +184,13 @@ CLI (`cdc-demo`, Typer):
 - `cdc-demo verify --manifest PATH [--snapshot-rows 500] [--timeout 300]`: polls the Delta
   tables and Postgres until the expectations hold or the timeout passes; prints expected vs
   actual and exits 1 on mismatch. Assumes fresh volumes (one mutator run).
+- `cdc-demo merge`: one batch merge run (see above); prints events read, orders, rows inserted,
+  updated and deleted, and the watermark before and after. Safe to re-run.
+- `cdc-demo verify-current [--timeout S]`: compares `current/orders` with Postgres on
+  order_id, customer_id, status, amount, created_at and updated_at. Prints `current_rows,
+  postgres_rows, missing_in_current, extra_in_current, mismatched_rows, duplicate_keys` and up
+  to 10 example ids per problem; exits 0 only when everything matches. `--timeout` (default 0) re-checks until
+  the tables match or the time passes.
 
 Containers:
 
@@ -162,7 +207,8 @@ Containers:
 - `make demo`: `down -v`, `--profile tools build` (`up` skips that profile and `run` never
   rebuilds a stale image), `up -d --wait`, wait until the topic holds the 500 snapshot events,
   `run mutator check-schema`, `run mutator mutate --count 200 --seed 42`,
-  `run spark-job verify`. The stack stays up for exploration; `make down` removes it with its
+  `run spark-job verify`, `run spark-job merge` twice (the second run must report 0 inserted,
+  updated and deleted), `run spark-job verify-current`. The stack stays up for exploration; `make down` removes it with its
   volumes.
 
 ## Idempotency rules

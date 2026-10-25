@@ -1,7 +1,7 @@
 SHELL := bash
 .DEFAULT_GOAL := help
 
-.PHONY: help install lint fmt proto test-fast test-spark test up down demo ps logs ui
+.PHONY: help install lint fmt proto test-fast test-spark test up down demo merge ps logs ui
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-12s %s\n", $$1, $$2}'
@@ -39,6 +39,9 @@ down: ## Stop the stack and delete its volumes
 
 demo: ## End-to-end demo on fresh volumes
 	bash scripts/demo.sh
+
+merge: ## Merge the CDC log into the current table (stack must be up)
+	docker compose run --rm spark-job merge
 
 ps: ## Show service status
 	docker compose ps
