@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 step=0
 banner() {
     step=$((step + 1))
-    printf '\n==> [%d/6] %s\n' "$step" "$1"
+    printf '\n==> [%d/8] %s\n' "$step" "$1"
 }
 
 on_error() {
@@ -43,5 +43,15 @@ docker compose run --rm mutator mutate --count 200 --seed 42 --manifest /runs/de
 
 banner "Verifying Postgres, Kafka and the Delta tables agree"
 docker compose run --rm spark-job verify --manifest /runs/demo.json --timeout 300
+
+banner "Merging the CDC log into the current table (twice: the second run must change nothing)"
+docker compose run --rm spark-job merge
+# Capture, then print: `tee /dev/stderr` reopens a redirected log file and truncates it.
+second=$(docker compose run --rm -T spark-job merge)
+printf '%s\n' "$second"
+grep -q 'inserted 0, updated 0, deleted 0' <<<"$second"
+
+banner "Verifying the current table equals Postgres row by row"
+docker compose run --rm spark-job verify-current
 
 printf '\nDemo passed. Stack is still up (make logs, make ui, make down).\n'
