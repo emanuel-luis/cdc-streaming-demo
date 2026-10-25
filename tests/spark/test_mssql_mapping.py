@@ -82,8 +82,12 @@ def mapped(
     return map_changes(frame(spark, rows), batch, INGESTED, base)
 
 
-def events(df: DataFrame) -> list[Any]:
-    return df.orderBy("kafka_offset").collect()
+def events(df: DataFrame) -> list[dict[str, Any]]:
+    """Rows as dicts. PySpark collects TIMESTAMP as naive local time; make it aware UTC."""
+    return [
+        {k: v.astimezone(UTC) if isinstance(v, datetime) else v for k, v in r.asDict().items()}
+        for r in df.orderBy("kafka_offset").collect()
+    ]
 
 
 def append_log(df: DataFrame, lake: LakeSettings) -> None:
