@@ -1,4 +1,4 @@
-"""`cdc-demo` command line. Spark modules are imported inside the commands that need them."""
+"""`cdc-demo` command line. Spark, dbt and DuckDB modules are imported inside the commands."""
 
 from pathlib import Path
 from typing import Annotated
@@ -6,7 +6,7 @@ from typing import Annotated
 import typer
 
 from cdc_demo.logging import configure_logging
-from cdc_demo.settings import LakeSettings, S3Settings
+from cdc_demo.settings import LakeSettings, S3Settings, WarehouseSettings
 
 app = typer.Typer(no_args_is_help=True, add_completion=False, help="CDC streaming demo.")
 
@@ -121,6 +121,26 @@ def verify_current(
     lake = LakeSettings()
     code = run_verify_current(timeout, lake, PostgresSettings(), _s3_for(lake), SparkSettings())
     raise typer.Exit(code)
+
+
+@app.command()
+def build_marts() -> None:
+    """Build the DuckDB marts with dbt from the Delta tables; publish only when all tests pass."""
+    from cdc_demo.marts import build_marts as run_build
+
+    configure_logging()
+    raise typer.Exit(run_build(WarehouseSettings(), LakeSettings()))
+
+
+@app.command()
+def verify_marts(
+    manifest: Annotated[Path, typer.Option(help="Manifest written by `mutate`.")],
+    snapshot_rows: Annotated[int, typer.Option(min=0, help="Rows in the seeded snapshot.")] = 500,
+) -> None:
+    """Check the marts against the manifest; exit 1 on any difference."""
+    from cdc_demo.verify_marts import run_verify_marts
+
+    raise typer.Exit(run_verify_marts(manifest, snapshot_rows, WarehouseSettings()))
 
 
 @app.command()
