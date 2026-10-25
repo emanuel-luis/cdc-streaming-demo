@@ -1,7 +1,8 @@
 # Memory limits (long-running services; target total under 6 GB). Measured peaks during `make demo`:
-#   consumer 1.7 GB, connect 0.85 GB, kafka 0.56 GB, s3 0.19 GB, postgres 0.05 GB.
-#   postgres 256m | kafka 1g (heap 512m) | connect 1280m (heap 512m) | s3 512m |
-#   consumer 2560m (driver 1g) = 5.5 GB. On demand: kafka-ui 512m (profile ui), mutator 256m and
+#   consumer 1.7 GB, connect 0.85 GB, kafka 0.56 GB, s3 0.19 GB, postgres 0.05 GB (Phase 1 numbers;
+#   schema-registry not measured yet).
+#   postgres 256m | kafka 1g (heap 512m) | schema-registry 512m (heap 256m) |
+#   connect 1280m (heap 512m) | s3 512m | consumer 2560m (driver 1g) = 6.0 GB. On demand: kafka-ui 512m (profile ui), mutator 256m and
 #   spark-job 2g (profile tools), curl init containers 64m each.
 name: cdc-streaming-demo
 
@@ -13,6 +14,7 @@ x-app-env: &app-env
   S3_ENDPOINT: http://s3:9000
   LAKE_ROOT: ${LAKE_ROOT:-s3a://cdc-demo}
   KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+  SCHEMA_REGISTRY_URL: http://schema-registry:8081
   CDC_TOPIC: ${CDC_TOPIC:-cdc.public.orders}
   POSTGRES_HOST: postgres
   POSTGRES_PORT: "5432"
@@ -83,13 +85,46 @@ services:
       start_period: 20s
     networks: [demo]
 
+  schema-registry:
+    image: confluentinc/cp-schema-registry:8.3.2
+    mem_limit: 512m
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: kafka:29092
+      SCHEMA_REGISTRY_SCHEMA_COMPATIBILITY_LEVEL: backward
+      SCHEMA_REGISTRY_HEAP_OPTS: -Xms256m -Xmx256m
+    ports:
+      - "127.0.0.1:${SCHEMA_REGISTRY_PORT:-8081}:8081"
+    healthcheck:
+      # The 8.3.2 image ships no curl or wget; it does ship python3.
+      test:
+        - CMD
+        - python3
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8081/subjects', timeout=4)"
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+    networks: [demo]
+
   connect:
-    image: quay.io/debezium/connect:3.7.0.Final
+    # Debezium Connect plus Confluent's Protobuf converter (docker/connect.Dockerfile).
+    build:
+      context: docker
+      dockerfile: connect.Dockerfile
+    image: cdc-demo-connect:local
     mem_limit: 1280m
     depends_on:
       kafka:
         condition: service_healthy
       postgres:
+        condition: service_healthy
+      schema-registry:
         condition: service_healthy
     environment:
       BOOTSTRAP_SERVERS: kafka:29092
@@ -241,9 +276,12 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
+      schema-registry:
+        condition: service_healthy
     environment:
       KAFKA_CLUSTERS_0_NAME: cdc-demo
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      KAFKA_CLUSTERS_0_SCHEMAREGISTRY: http://schema-registry:8081
       KAFKA_CLUSTERS_0_KAFKACONNECT_0_NAME: debezium
       KAFKA_CLUSTERS_0_KAFKACONNECT_0_ADDRESS: http://connect:8083
       DYNAMIC_CONFIG_ENABLED: "false"
