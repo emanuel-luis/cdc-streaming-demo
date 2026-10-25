@@ -91,6 +91,18 @@ class KafkaSettings(BaseSettings):
     cdc_topic: str = "cdc.public.orders"
 
 
+class SchemaRegistrySettings(BaseSettings):
+    model_config = _config()
+
+    schema_registry_url: str = "http://localhost:8081"
+    cdc_topic: str = "cdc.public.orders"
+
+    @property
+    def value_subject(self) -> str:
+        # Confluent's TopicNameStrategy: <topic>-value.
+        return f"{self.cdc_topic}-value"
+
+
 class ConsumerSettings(BaseSettings):
     model_config = _config("CONSUMER_")
 
