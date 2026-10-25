@@ -1,0 +1,38 @@
+version: 2
+
+models:
+  - name: stg_lake__orders_cdc_log
+    columns:
+      - name: event_id
+        data_tests: [unique, not_null]
+      - name: op
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [r, c, u, d]
+      - name: order_id
+        data_tests: [not_null]
+  - name: stg_lake__orders_current
+    columns:
+      - name: order_id
+        data_tests: [unique, not_null]
+  - name: stg_lake__rejects
+    data_tests:
+      - unique_combination:
+          arguments:
+            columns: [kafka_topic, kafka_partition, kafka_offset]
+  - name: stg_lake__ingest_runs
+    data_tests:
+      - unique_combination:
+          arguments:
+            columns: [run_id, batch_id]
+  - name: stg_lake__merge_runs
+    columns:
+      - name: run_id
+        data_tests: [unique, not_null]
+  - name: stg_lake__merge_watermark
+    data_tests:
+      - unique_combination:
+          arguments:
+            columns: [kafka_topic, kafka_partition]

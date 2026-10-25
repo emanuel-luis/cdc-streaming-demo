@@ -12,3 +12,6 @@ derby.log
 dist/
 *.egg-info/
 /runs/
+/warehouse/
+dbt/target/
+dbt/logs/
