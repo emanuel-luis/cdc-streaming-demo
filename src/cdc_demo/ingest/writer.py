@@ -15,6 +15,21 @@ from cdc_demo.settings import LakeSettings
 log = logging.getLogger(__name__)
 
 
+def append_delta(
+    df: DataFrame, path: str, app_id: str, version: int, partitioned: bool = True
+) -> None:
+    """Append to a Delta table, once per (app_id, version): Delta skips a repeated pair."""
+    writer = (
+        df.write.format("delta")
+        .mode("append")
+        .option("txnAppId", app_id)
+        .option("txnVersion", version)
+    )
+    if partitioned:
+        writer = writer.partitionBy("_partition_date")
+    writer.save(path)
+
+
 class BatchWriter:
     """Callable for `foreachBatch(writer)`.
 
@@ -32,17 +47,6 @@ class BatchWriter:
         self.topic = topic
         self.run_id = run_id or uuid.uuid4().hex
 
-    def _append(self, df: DataFrame, path: str, batch_id: int, partitioned: bool = True) -> None:
-        writer = (
-            df.write.format("delta")
-            .mode("append")
-            .option("txnAppId", self.app_id)
-            .option("txnVersion", batch_id)
-        )
-        if partitioned:
-            writer = writer.partitionBy("_partition_date")
-        writer.save(path)
-
     def __call__(self, raw: DataFrame, batch_id: int) -> None:
         started_at = datetime.now(UTC)
         raw.persist()
@@ -59,9 +63,9 @@ class BatchWriter:
                     raise RuntimeError("aggregate over the batch returned no row")
                 valid_rows, rejected_rows = valid.count(), rejects.count()
                 if valid_rows:
-                    self._append(valid, self.lake.cdc_log, batch_id)
+                    append_delta(valid, self.lake.cdc_log, self.app_id, batch_id)
                 if rejected_rows:
-                    self._append(rejects, self.lake.rejects, batch_id)
+                    append_delta(rejects, self.lake.rejects, self.app_id, batch_id)
                 run = raw.sparkSession.createDataFrame(
                     [
                         (
@@ -80,7 +84,7 @@ class BatchWriter:
                     ],
                     INGEST_RUNS_SCHEMA,
                 )
-                self._append(run, self.lake.ingest_runs, batch_id, partitioned=False)
+                append_delta(run, self.lake.ingest_runs, self.app_id, batch_id, partitioned=False)
             finally:
                 valid.unpersist()
                 rejects.unpersist()
