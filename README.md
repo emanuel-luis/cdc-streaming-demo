@@ -237,7 +237,7 @@ How the SQL Server path works:
 | --- | --- | --- |
 | Long-running services | postgres, kafka, schema-registry, connect, s3, consumer | mssql, s3, consumer |
 | Memory limits in `compose.yaml` (long-running) | 6 GB in total (postgres 256 MB, kafka 1 GB, schema-registry 512 MB, connect 1.25 GB, s3 512 MB, consumer 2.5 GB) | 5 GB in total (mssql 2 GB, s3 512 MB, consumer 2.5 GB) |
-| Measured peak memory | [to be measured] (`make stats` during `make demo`) | [to be measured] (`make stats` during `make mssql-demo`) |
+| Measured peak memory | About 6 GB in one sample with a `spark-job` running (2026-10-25; per-service peaks under Memory budget) | [to be measured] (`make stats` during `make mssql-demo`) |
 | Where the changes are read | the Postgres WAL, through a replication slot | the change table `cdc.dbo_orders_CT`, filled by the CDC capture job inside the source database |
 | Replay buffer | the Kafka topic | the change table, trimmed by the CDC cleanup job |
 | Order of events | `(source_lsn, kafka_offset)`, Postgres LSN and the Kafka offset | `(_start_lsn, _command_id, _seqval, _operation)` from the library, turned into a dense `kafka_offset`; `source_lsn` is the packed commit LSN |

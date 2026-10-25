@@ -207,6 +207,9 @@ def test_merger_reads_the_mapped_log(spark: SparkSession, tmp_path: Path) -> Non
     lake = LakeSettings(lake_root=tmp_path.as_uri())
     snapshot = [row(0, lsn(5, 0x100), None, id=i, status="pending") for i in (1, 2, 3)]
     append_log(mapped(spark, snapshot, base=-1, batch=-1).valid, lake)
+    first = run_merge(spark, lake)
+    assert (first.rows_inserted, first.rows_updated, first.rows_deleted) == (3, 0, 0)
+
     tx1, tx2, tx3 = lsn(5, 0x200), lsn(5, 0x300), lsn(5, 0x400)
     changes = [
         row(4, tx1, "0x01", id=1, status="confirmed"),
@@ -218,9 +221,11 @@ def test_merger_reads_the_mapped_log(spark: SparkSession, tmp_path: Path) -> Non
     ]
     append_log(mapped(spark, changes, base=2, batch=0).valid, lake)
 
+    # Rows 1 and 2 are in the table now, so the changes update 1 (twice in one transaction: the
+    # last update wins), delete 2 and insert 4.
     result = run_merge(spark, lake)
-    assert (result.events_read, result.distinct_orders) == (7, 4)
-    assert (result.rows_inserted, result.rows_updated, result.rows_deleted) == (2, 1, 0)
+    assert (result.events_read, result.distinct_orders) == (4, 3)
+    assert (result.rows_inserted, result.rows_updated, result.rows_deleted) == (1, 1, 1)
     current = spark.read.format("delta").load(lake.current_orders).collect()
     statuses = {r["order_id"]: r["status"] for r in current}
     assert statuses == {1: "shipped", 3: "pending", 4: "pending"}
