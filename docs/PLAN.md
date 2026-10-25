@@ -24,7 +24,7 @@ Checkpoints live under `s3a://cdc-demo/_checkpoints/<query>`.
 ```
 compose.yaml                 # whole stack, project name cdc-streaming-demo
 .env.example                 # every port, credential and tunable, commented
-Makefile                     # help, install, lint, proto, test, test-fast, test-spark, up, down, demo
+Makefile                     # help, install, lint, proto, test(-fast, -spark), up, down, demo
 docker/app.Dockerfile        # targets: mutator (slim) and spark (JRE + pyspark + baked jars)
 docker/connect.Dockerfile    # Debezium Connect + Confluent Protobuf converter (Phase 2)
 postgres/initdb/             # schema, seed (seeded random), CDC role, publication
@@ -123,7 +123,7 @@ Environment (names are the contract; defaults in `.env.example`):
 | `CDC_DB_USER`, `CDC_DB_PASSWORD` | `cdc_reader`, `cdc_reader_pw` | Debezium (replication role, created by initdb) |
 | `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` (`kafka:29092` inside compose) | consumer |
 | `CDC_TOPIC` | `cdc.public.orders` | consumer, check-schema (subject `<CDC_TOPIC>-value`) |
-| `SCHEMA_REGISTRY_URL` | `http://localhost:8081` (`http://schema-registry:8081` inside compose) | check-schema, kafka-ui |
+| `SCHEMA_REGISTRY_URL` | `http://localhost:8081` (`http://schema-registry:8081` inside compose) | check-schema |
 | `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_REGION` | `http://localhost:9000`, `cdc_demo_admin`, `cdc_demo_secret`, `us-east-1` | consumer, verify, s3 image |
 | `LAKE_ROOT` | `s3a://cdc-demo` | consumer, verify (a `file://` path in tests) |
 | `CONSUMER_TRIGGER_INTERVAL`, `CONSUMER_MAX_OFFSETS_PER_TRIGGER`, `CONSUMER_APP_ID` | `10 seconds`, `10000`, `orders-cdc-consumer-v1` | consumer |
@@ -152,15 +152,17 @@ Containers:
 - `docker/app.Dockerfile` target `mutator` (no JVM) and target `spark` (JRE, `--extra spark`,
   Ivy cache baked at build time into `/opt/spark-ivy`, so runs need no network). Both run as a
   non-root user, entrypoint `cdc-demo`.
-- Compose services: `postgres`, `kafka`, `schema-registry`, `connect`, `connector-init` (one-shot), `s3`,
-  `s3-init` (one-shot), `consumer` (long-running, `restart: on-failure`), `mutator` and
-  `spark-job` (profile `tools`, used through `docker compose run --rm`), `kafka-ui` (profile
-  `ui`). Shared named volume `demo_runs` mounted at `/runs` for manifests.
+- Compose services: `postgres`, `kafka`, `schema-registry`, `connect`, `connector-init`
+  (one-shot), `s3`, `s3-init` (one-shot), `consumer` (long-running, `restart: on-failure`),
+  `mutator` and `spark-job` (profile `tools`, used through `docker compose run --rm`),
+  `kafka-ui` (profile `ui`). Shared named volume `demo_runs` mounted at `/runs` for manifests.
 - Broker auto topic creation is off; the connector creates its topic through
   `topic.creation.default.*` (1 partition, replication 1).
-- `make demo`: `down -v`, `up -d --build --wait`, wait until the topic holds the 500 snapshot
-  events, `run mutator check-schema`, `run mutator mutate --count 200 --seed 42`, `run spark-job verify`. The stack stays up
-  for exploration; `make down` removes it with its volumes.
+- `make demo`: `down -v`, `--profile tools build` (`up` skips that profile and `run` never
+  rebuilds a stale image), `up -d --wait`, wait until the topic holds the 500 snapshot events,
+  `run mutator check-schema`, `run mutator mutate --count 200 --seed 42`,
+  `run spark-job verify`. The stack stays up for exploration; `make down` removes it with its
+  volumes.
 
 ## Idempotency rules
 
