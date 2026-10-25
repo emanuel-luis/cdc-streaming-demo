@@ -23,6 +23,13 @@ updates:
     groups:
       docker:
         patterns: ["*"]
+    ignore:
+      # The apps run on Python 3.12 and Spark 4.2 on Java 17 (LTS); only patch releases are
+      # automatic. Moving either line is a deliberate change, tested by hand.
+      - dependency-name: python
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: eclipse-temurin
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: docker-compose
     directory: /
@@ -31,3 +38,7 @@ updates:
     groups:
       docker-compose:
         patterns: ["*"]
+    ignore:
+      # A Postgres major upgrade needs a dump and restore or fresh volumes.
+      - dependency-name: postgres
+        update-types: ["version-update:semver-major"]

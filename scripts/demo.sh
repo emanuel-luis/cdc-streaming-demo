@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 step=0
 banner() {
     step=$((step + 1))
-    printf '\n==> [%d/5] %s\n' "$step" "$1"
+    printf '\n==> [%d/6] %s\n' "$step" "$1"
 }
 
 on_error() {
@@ -27,10 +27,16 @@ banner "Removing any previous stack and its volumes"
 docker compose --profile tools --profile ui down -v --remove-orphans
 
 banner "Building images and starting the stack"
-docker compose up -d --build --wait
+# `up` skips the tools profile (mutator, spark-job) and `run` only builds a missing image,
+# never a stale one, so every image is built here.
+docker compose --profile tools build
+docker compose up -d --wait
 
 banner "Waiting for the 500-row snapshot to reach Kafka"
 bash scripts/wait-for-snapshot.sh 500 300
+
+banner "Checking the checked-in Protobuf schema against Schema Registry"
+docker compose run --rm mutator check-schema
 
 banner "Applying 200 seeded mutations in Postgres"
 docker compose run --rm mutator mutate --count 200 --seed 42 --manifest /runs/demo.json

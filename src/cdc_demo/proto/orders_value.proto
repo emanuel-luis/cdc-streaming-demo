@@ -1,0 +1,49 @@
+// Value schema of the topic cdc.public.orders, as the Confluent Protobuf converter registers it.
+// The text below the comments is the registry's, verbatim. `cdc-demo check-schema` compares it
+// with the registered subject; the consumer decodes with orders_value.desc, compiled from this file.
+// To change it: edit this file, run `make proto`, then run the demo.
+syntax = "proto3";
+package cdc.public.orders;
+
+message Envelope {
+  Value before = 1;
+  Value after = 2;
+  Source source = 3;
+  block transaction = 4;
+  string op = 5;
+  int64 ts_ms = 6;
+  int64 ts_us = 7;
+  int64 ts_ns = 8;
+
+  message Value {
+    int64 id = 1;
+    int32 customer_id = 2;
+    string status = 3;
+    string amount = 4;
+    string created_at = 5;
+    string updated_at = 6;
+  }
+  message Source {
+    string version = 1;
+    string connector = 2;
+    string name = 3;
+    int64 ts_ms = 4;
+    string snapshot = 5;
+    string db = 6;
+    string sequence = 7;
+    int64 ts_us = 8;
+    int64 ts_ns = 9;
+    string schema = 10;
+    string table = 11;
+    int64 txId = 12;
+    int64 lsn = 13;
+    int64 xmin = 14;
+    string origin = 15;
+    int64 origin_lsn = 16;
+  }
+  message block {
+    string id = 1;
+    int64 total_order = 2;
+    int64 data_collection_order = 3;
+  }
+}

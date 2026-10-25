@@ -1,0 +1,46 @@
+
+”
+orders_value.protocdc.public.orders"â
+Envelope9
+before (2!.cdc.public.orders.Envelope.ValueRbefore7
+after (2!.cdc.public.orders.Envelope.ValueRafter:
+source (2".cdc.public.orders.Envelope.SourceRsourceC
+transaction (2!.cdc.public.orders.Envelope.blockRtransaction
+op (	Rop
+ts_ms (RtsMs
+ts_us (RtsUs
+ts_ns (RtsNs¦
+Value
+id (Rid
+customer_id (R
+customerId
+status (	Rstatus
+amount (	Ramount
+
+created_at (	R	createdAt
+
+updated_at (	R	updatedAtú
+Source
+version (	Rversion
+	connector (	R	connector
+name (	Rname
+ts_ms (RtsMs
+snapshot (	Rsnapshot
+db (	Rdb
+sequence (	Rsequence
+ts_us (RtsUs
+ts_ns	 (RtsNs
+schema
+ (	Rschema
+table (	Rtable
+txId (RtxId
+lsn (Rlsn
+xmin (Rxmin
+origin (	Rorigin
+
+origin_lsn (R	originLsnl
+block
+id (	Rid
+total_order (R
+totalOrder2
+data_collection_order (RdataCollectionOrderbproto3
