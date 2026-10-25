@@ -257,7 +257,7 @@ services:
     # build with "parent snapshot ... does not exist".
     image: cdc-demo-spark:local
     pull_policy: never
-    mem_limit: 2g
+    mem_limit: 2560m
     profiles: [tools]
     depends_on:
       postgres:
