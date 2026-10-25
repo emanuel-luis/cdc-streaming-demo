@@ -27,7 +27,10 @@ banner "Removing any previous stack and its volumes"
 docker compose --profile tools --profile ui down -v --remove-orphans
 
 banner "Building images and starting the stack"
-docker compose up -d --build --wait
+# `up` skips the tools profile (mutator, spark-job) and `run` only builds a missing image,
+# never a stale one, so every image is built here.
+docker compose --profile tools build
+docker compose up -d --wait
 
 banner "Waiting for the 500-row snapshot to reach Kafka"
 bash scripts/wait-for-snapshot.sh 500 300
