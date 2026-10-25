@@ -31,6 +31,10 @@ jobs:
       - run: uv run ruff check --output-format=github
       - run: uv run ruff format --check
       - run: uv run mypy
+      - run: uv run dbt parse --project-dir dbt --profiles-dir dbt
+        env:
+          DBT_TARGET_PATH: ${{ runner.temp }}/dbt-target
+          DBT_LOG_PATH: ${{ runner.temp }}/dbt-logs
 
   unit:
     needs: lint

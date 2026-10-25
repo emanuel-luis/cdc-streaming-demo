@@ -1,7 +1,7 @@
 SHELL := bash
 .DEFAULT_GOAL := help
 
-.PHONY: help install lint fmt proto test-fast test-spark test up down demo merge ps logs ui
+.PHONY: help install lint fmt proto test-fast test-spark test up down demo merge marts dashboard ps logs ui
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-12s %s\n", $$1, $$2}'
@@ -9,10 +9,11 @@ help: ## Show this help
 install: ## Install all dependencies, extras included
 	uv sync --all-extras
 
-lint: ## Ruff check, ruff format check, mypy (same as the CI lint job)
+lint: ## Ruff, mypy, dbt parse (same as the CI lint job)
 	uv run ruff check
 	uv run ruff format --check
 	uv run mypy
+	uv run dbt parse --project-dir dbt --profiles-dir dbt
 
 fmt: ## Format and apply safe lint fixes
 	uv run ruff format
@@ -42,6 +43,14 @@ demo: ## End-to-end demo on fresh volumes
 
 merge: ## Merge the CDC log into the current table (stack must be up)
 	docker compose run --rm spark-job merge
+
+marts: ## Build the DuckDB marts with dbt (stack up, current table merged)
+	docker compose --profile tools build analytics
+	docker compose run --rm analytics build-marts
+
+dashboard: ## Start the dashboard (http://localhost:8501)
+	docker compose --profile tools build analytics
+	docker compose --profile ui up -d --wait dashboard
 
 ps: ## Show service status
 	docker compose ps

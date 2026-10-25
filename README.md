@@ -20,8 +20,13 @@
   reason, and one run-metadata row per micro-batch (counts, offsets, UTC times).
 - Re-runnable infrastructure: connector registration and bucket creation are idempotent init
   containers, so `docker compose up` always converges to the same state.
-- An end-to-end check: `make demo` mutates the source with a seeded workload and asserts the
-  lake against the mutator's manifest and against Postgres.
+- A current-state table kept by an incremental MERGE from the log, with an offset watermark.
+- An analytics layer without a warehouse server: dbt-duckdb reads the Delta tables in place
+  (DuckDB's `delta` extension over S3) and builds staging views and four marts with enforced
+  contracts and tests; a Streamlit dashboard reads the resulting DuckDB file.
+- An end-to-end check: `make demo` mutates the source with a seeded workload, asserts the
+  lake against the mutator's manifest and against Postgres, then asserts the marts against
+  the same manifest.
 
 ## Architecture
 
@@ -44,6 +49,15 @@ flowchart LR
         MRG --> CUR[(current/orders<br/>one row per live order)]
         MRG --> WM[(_meta/merge_watermark<br/>_meta/merge_runs)]
     end
+    subgraph Serving["Serving (warehouse volume)"]
+        RAW --> DBT[cdc-demo build-marts<br/>dbt build, DuckDB delta_scan]
+        CUR --> DBT
+        RUNS --> DBT
+        WM --> DBT
+        DBT --> WH[(analytics.duckdb<br/>staging views + 4 marts)]
+        WH --> DASH[Streamlit dashboard<br/>read-only]
+    end
+    WH -. verify-marts .-> CHECK3{{cdc-demo verify-marts}}
     RAW -. verify .-> CHECK{{cdc-demo verify}}
     PG -. verify .-> CHECK
     CUR -. verify-current .-> CHECK2{{cdc-demo verify-current}}
@@ -60,14 +74,15 @@ flowchart LR
 | Processed | Delta `s3a://cdc-demo/current/orders` | One row per live order, the latest state; written only by `cdc-demo merge` |
 | Merger control | Delta `s3a://cdc-demo/_meta/merge_watermark`, `_meta/merge_runs` | Last merged Kafka offset per partition; one row per merge run |
 
-The serving layer (dbt models and a dashboard) is the next phase; see [Roadmap](#roadmap).
+| Serving | DuckDB file `analytics.duckdb` in the `warehouse` volume | dbt staging views over the Delta tables and four marts: `dim_orders_current`, `fct_order_status_changes`, `fct_order_activity_hourly`, `fct_pipeline_runs`; written only by `cdc-demo build-marts` |
+| Presentation | Streamlit at <http://localhost:8501> | Reads the DuckDB file read-only |
 
 ## Tech stack
 
 Python 3.12 · PySpark 4.2 Structured Streaming · Delta Lake 4.4 · Debezium 3.7 · Protobuf with
 Confluent Schema Registry · Kafka (Confluent Platform 8.3, KRaft) · PostgreSQL 18 · RustFS
 (S3-compatible) · Docker Compose · Typer · pydantic-settings · uv · ruff · mypy ·
-pytest + Hypothesis · GitHub Actions
+dbt-duckdb · DuckDB 2.0 · Streamlit · pytest + Hypothesis · GitHub Actions
 
 ## Quickstart
 
@@ -101,7 +116,7 @@ Ports are the defaults; change any of them in `.env` (copy `.env.example`).
    curl -s localhost:8081/subjects/cdc.public.orders-value/versions/latest
    ```
 
-   The messages are binary Protobuf now, so the console shows raw bytes. Kafka UI (step 6) is
+   The messages are binary Protobuf now, so the console shows raw bytes. Kafka UI (step 8) is
    configured with the registry to browse the schema subjects.
 3. **Change the source.** The mutator advances order statuses, edits amounts, inserts and
    deletes, one transaction per change, and writes a manifest of what it did:
@@ -131,7 +146,23 @@ Ports are the defaults; change any of them in `.env` (copy `.env.example`).
 
    Mutate again and merge again to see only the new events picked up. Every run is recorded in
    `_meta/merge_runs` with the CDC log version it read and the MERGE row counts.
-6. **Optional UI.** `make ui` starts Kafka UI at <http://localhost:8090> (topics, decoded messages,
+6. **Build the marts.** `build-marts` runs `dbt build` inside the `analytics` container. dbt
+   reads the Delta tables straight from S3 with DuckDB's `delta` extension, builds into a
+   staging DuckDB file and renames it over `analytics.duckdb` only when every model and test
+   passed. `verify-marts` then checks the marts against the mutator manifest:
+
+   ```bash
+   make marts
+   docker compose run --rm analytics verify-marts --manifest /runs/demo.json
+   ```
+
+   `make demo` already did both. Mutate and merge again, run `make marts` again, and the
+   file is replaced with the new state.
+7. **Dashboard.** `make dashboard` starts Streamlit at <http://localhost:8501>: live orders,
+   CDC events, rejected messages, the last merge, orders by status, events per hour, the
+   latest status changes and the latest pipeline runs. It does not refresh by itself;
+   after `make marts`, reload the page. The caption shows when the marts were built.
+8. **Optional UI.** `make ui` starts Kafka UI at <http://localhost:8090> (topics, decoded messages,
    the schema subjects, the Connect cluster). The Spark UI of the running consumer is at <http://localhost:4040>.
 
 ### Memory budget
@@ -142,15 +173,20 @@ Every long-running service has a memory limit in `compose.yaml`, sized for a 16 
 | Service | Limit | Measured peak |
 | --- | --- | --- |
 | postgres | 256 MB | 73 MB |
-| kafka | 1 GB (heap 512 MB) | 640 MB |
-| schema-registry | 512 MB (heap 256 MB) | 340 MB |
+| kafka | 1 GB (heap 512 MB) | 690 MB |
+| schema-registry | 512 MB (heap 256 MB) | 410 MB |
 | connect | 1.25 GB (heap 512 MB) | 1.03 GB |
-| s3 | 512 MB | 140 MB |
-| consumer (Spark driver 1 GB) | 2.5 GB | 2.1 GB |
+| s3 | 512 MB | 170 MB |
+| consumer (Spark driver 1 GB) | 2.5 GB | 2.3 GB |
+| analytics (short-lived, DuckDB capped at 512 MB) | 1 GB | 200 MB |
+| dashboard (on demand) | 512 MB | 52 MB |
 
-`verify` runs in a short-lived `spark-job` container with the consumer's limit, 2.5 GB (Spark
-driver 1 GB). It peaked at 2.0 GB under the earlier 2 GB limit, so it got the same headroom
-as the consumer. With the consumer and a `spark-job` running, the stack used about 6 GB.
+`verify`, `merge` and `verify-current` run in short-lived `spark-job` containers with the
+consumer's limit, 2.5 GB (Spark driver 1 GB). Both Spark containers grow toward their limit:
+the same `spark-job` runs peaked at 2.0 GB under an earlier 2 GB limit and at 2.4 GB under
+2.5 GB, and none was killed, which points to page cache the kernel reclaims rather than heap.
+The dashboard figure comes from health probes, with no browser session open. With the
+consumer and a `spark-job` running, the whole stack used at most about 6.2 GB in one sample.
 
 ## Design notes
 
@@ -184,6 +220,15 @@ as the consumer. With the consumer and a `spark-job` running, the stack used abo
   header or a payload that does not decode go to the rejects table (base64 of the value).
   Proto3 scalars at their zero value decode as null.
 
+- **dbt over Delta without Spark.** DuckDB reads the Delta tables where they are, so the
+  analytics layer needs no Spark session and no copy of the data. DuckDB takes the S3
+  credentials only for `s3://` paths, so the lake root `s3a://cdc-demo` is rewritten to
+  `s3://cdc-demo` for dbt. The build writes to a staging file and renames it when dbt
+  succeeds, so the dashboard never reads a half-built or failing warehouse. One check
+  recomputes the current table from the CDC log (latest event per order up to the merge
+  watermark) and compares both ways. The consumer creates its three Delta tables at
+  startup, because the rejects table would otherwise not exist until the first reject.
+
 - **The current table and its watermark.** `cdc-demo merge` is a batch job. It pins the latest
   version of the CDC log and reads it once with `versionAsOf`, because the consumer keeps
   appending and two reads could see different data. From that single read it takes the events
@@ -201,11 +246,13 @@ plan is in [docs/PLAN.md](docs/PLAN.md).
 
 ```
 compose.yaml              the whole stack (project name cdc-streaming-demo)
-docker/                   mutator and Spark images (jars baked at build time), Connect image
+docker/                   mutator, Spark and analytics images (jars baked at build time), Connect image
 postgres/initdb/          schema, seeded data, replication role, publication
 debezium/                 connector configuration
 scripts/                  connector registration, bucket creation, demo orchestration
-src/cdc_demo/             the cdc-demo CLI: mutator, Spark ingest, merge, verify, check-schema
+src/cdc_demo/             the cdc-demo CLI: mutator, Spark ingest, merge, marts, verify, check-schema
+dbt/                      dbt-duckdb project: sources, staging views, marts, tests
+dashboard/                Streamlit app over the DuckDB marts
 src/cdc_demo/proto/       the Protobuf contract: .proto and compiled descriptor set
 tests/                    unit and property tests; Spark tests behind the `spark` marker
 docs/                     plan and decision log
@@ -216,7 +263,7 @@ docs/                     plan and decision log
 ```bash
 make install      # uv sync --all-extras
 make proto        # recompile the Protobuf descriptor set after editing the .proto
-make lint         # ruff check, ruff format --check, mypy (strict)
+make lint         # ruff check, ruff format --check, mypy (strict), dbt parse
 make test-fast    # unit and property tests, no JVM
 make test-spark   # Spark tests (Linux, macOS, WSL or CI; needs Java 17)
 ```
@@ -226,7 +273,7 @@ make test-spark   # Spark tests (Linux, macOS, WSL or CI; needs Java 17)
 - [x] Minimum shippable: compose stack, mutator, raw CDC log in Delta, end-to-end check
 - [x] Protobuf on the wire with Confluent Schema Registry and a schema contract test
 - [x] Current-state table: incremental MERGE from the CDC log with an offset watermark
-- [ ] dbt (DuckDB) staging and marts, and a Streamlit dashboard
+- [x] dbt (DuckDB) staging and marts, and a Streamlit dashboard
 - [ ] Two ways to do CDC: SQL Server CDC read directly by Spark with
       [mssql-cdc-pyspark](https://github.com/emanuel-luis/mssql-cdc-pyspark), compared with
       the Debezium path

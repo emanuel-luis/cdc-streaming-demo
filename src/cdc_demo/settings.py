@@ -1,5 +1,6 @@
 """Environment-driven settings, one class per component. Names follow docs/PLAN.md."""
 
+from pathlib import Path
 from typing import Any
 
 from pydantic import Field, SecretStr, model_validator
@@ -94,6 +95,33 @@ class LakeSettings(BaseSettings):
 
     def checkpoint(self, name: str) -> str:
         return self._path("_checkpoints", name)
+
+    @property
+    def duckdb_root(self) -> str:
+        # DuckDB's S3 secrets apply to s3:// only; the s3a:// scheme is Hadoop's (decision 37).
+        for scheme in ("s3a://", "s3n://"):
+            if self.lake_root.startswith(scheme):
+                return "s3://" + self.lake_root.removeprefix(scheme).rstrip("/")
+        return self.lake_root.rstrip("/")
+
+
+class WarehouseSettings(BaseSettings):
+    """The DuckDB file the marts are built into and the dashboard reads."""
+
+    model_config = _config()
+
+    warehouse_dir: str = "warehouse"
+    dbt_project_dir: str = "dbt"
+
+    @property
+    def path(self) -> Path:
+        return Path(self.warehouse_dir) / "analytics.duckdb"
+
+    @property
+    def staging_path(self) -> Path:
+        # One dot only: DuckDB names the catalog after the stem up to the first dot, dbt-duckdb
+        # after os.path.splitext; "analytics.build" would make the two disagree.
+        return Path(self.warehouse_dir) / "analytics_build.duckdb"
 
 
 class KafkaSettings(BaseSettings):

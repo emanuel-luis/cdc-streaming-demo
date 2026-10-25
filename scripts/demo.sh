@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 step=0
 banner() {
     step=$((step + 1))
-    printf '\n==> [%d/8] %s\n' "$step" "$1"
+    printf '\n==> [%d/10] %s\n' "$step" "$1"
 }
 
 on_error() {
@@ -54,4 +54,10 @@ grep -q 'inserted 0, updated 0, deleted 0' <<<"$second"
 banner "Verifying the current table equals Postgres row by row"
 docker compose run --rm spark-job verify-current
 
-printf '\nDemo passed. Stack is still up (make logs, make ui, make down).\n'
+banner "Building the dbt marts in DuckDB from the Delta tables"
+docker compose run --rm analytics build-marts
+
+banner "Verifying the marts against the mutator manifest"
+docker compose run --rm analytics verify-marts --manifest /runs/demo.json
+
+printf '\nDemo passed. Stack is still up (make dashboard, make logs, make ui, make down).\n'
