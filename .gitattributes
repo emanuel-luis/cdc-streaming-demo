@@ -1,0 +1,6 @@
+# LF everywhere: shell scripts, SQL and configs are mounted into Linux containers as they are.
+* text=auto eol=lf
+
+# Compiled Protobuf descriptor set. It has no NUL byte, so Git would guess "text" and rewrite
+# its 0x0a bytes on a CRLF checkout.
+*.desc binary
