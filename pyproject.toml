@@ -55,7 +55,7 @@ target-version = "py312"
 extend-select = ["BLE", "E501", "I", "UP", "B", "SIM"]
 
 [tool.mypy]
-files = ["src"]
+files = ["src", "dashboard"]
 strict = true
 python_version = "3.12"
 enable_error_code = ["ignore-without-code"]
