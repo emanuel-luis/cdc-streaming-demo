@@ -65,7 +65,7 @@ pytest + Hypothesis · GitHub Actions
 
 ## Quickstart
 
-Requirements: Docker with Compose v2 (about 6 GB of memory free), `make` and `bash` (Linux,
+Requirements: Docker with Compose v2 (about 7 GB of memory free), `make` and `bash` (Linux,
 macOS or WSL).
 
 ```bash
@@ -122,14 +122,16 @@ Every long-running service has a memory limit in `compose.yaml`, sized for a 16 
 
 | Service | Limit | Measured peak |
 | --- | --- | --- |
-| postgres | 256 MB | 53 MB |
-| kafka | 1 GB (heap 512 MB) | 560 MB |
-| connect | 1.25 GB (heap 512 MB) | 840 MB |
-| s3 | 512 MB | 190 MB |
-| schema-registry | 512 MB (heap 256 MB) | not measured yet |
-| consumer (Spark driver 1 GB) | 2.5 GB | 1.7 GB |
+| postgres | 256 MB | 73 MB |
+| kafka | 1 GB (heap 512 MB) | 640 MB |
+| schema-registry | 512 MB (heap 256 MB) | 340 MB |
+| connect | 1.25 GB (heap 512 MB) | 1.03 GB |
+| s3 | 512 MB | 140 MB |
+| consumer (Spark driver 1 GB) | 2.5 GB | 2.1 GB |
 
-`verify` runs in a short-lived `spark-job` container limited to 2 GB.
+`verify` runs in a short-lived `spark-job` container with the consumer's limit, 2.5 GB (Spark
+driver 1 GB). It peaked at 2.0 GB under the earlier 2 GB limit, so it got the same headroom
+as the consumer. With the consumer and a `spark-job` running, the stack used about 6 GB.
 
 ## Design notes
 
