@@ -23,6 +23,8 @@ dependencies = [
 [project.optional-dependencies]
 # Exact pins: the container bakes jars that match these versions.
 spark = ["pyspark==4.2.0", "delta-spark==4.4.1"]
+# SQL Server CDC read by Spark (phase 5); the spark image installs it with the spark extra.
+mssql = ["mssql-cdc-pyspark==1.0.0rc1"]
 # Warehouse build and dashboard (phase 4); the analytics image installs only this extra.
 analytics = [
     "dbt-core>=1.12.6,<1.13",
