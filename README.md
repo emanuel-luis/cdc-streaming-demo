@@ -33,6 +33,7 @@ flowchart LR
     subgraph Transport
         PG -- WAL / pgoutput --> DBZ[Debezium Connect 3.7]
         DBZ --> KFK[[Kafka 4 KRaft<br/>cdc.public.orders]]
+        DBZ -. register schema .-> SR[Schema Registry 8.3]
     end
     subgraph Lake["Lake (S3-compatible storage)"]
         KFK --> SSS[Spark Structured Streaming<br/>foreachBatch, exactly once]
@@ -47,7 +48,7 @@ flowchart LR
 | Layer | Lives in | Contents |
 | --- | --- | --- |
 | Source | Postgres `public.orders` | The OLTP table the mutator changes |
-| Transport | Kafka `cdc.public.orders` | Debezium change events (JSON), keyed by `id`, tombstone after each delete |
+| Transport | Kafka `cdc.public.orders` | Debezium change events (Protobuf, Confluent wire format), keyed by `id`, tombstone after each delete |
 | Raw | Delta `s3a://cdc-demo/raw/orders_cdc_log` | One row per change event, never updated; partitioned by event date |
 | Raw rejects | Delta `s3a://cdc-demo/raw/_rejects/orders_cdc_log` | Events that broke the contract, with the reason and Kafka coordinates |
 | Run metadata | Delta `s3a://cdc-demo/_meta/ingest_runs` | One row per micro-batch: run id, batch id, counts, offset range |
@@ -57,8 +58,8 @@ and a dashboard) are the next phases; see [Roadmap](#roadmap).
 
 ## Tech stack
 
-Python 3.12 · PySpark 4.2 Structured Streaming · Delta Lake 4.4 · Debezium 3.7 · Kafka (Confluent
-Platform 8.3, KRaft) · PostgreSQL 18 · RustFS (S3-compatible) · Docker Compose · Typer ·
+Python 3.12 · PySpark 4.2 Structured Streaming · Delta Lake 4.4 · Debezium 3.7 · Protobuf with
+Confluent Schema Registry · Kafka (Confluent Platform 8.3, KRaft) · PostgreSQL 18 · RustFS (S3-compatible) · Docker Compose · Typer ·
 pydantic-settings · uv · ruff · mypy · pytest + Hypothesis · GitHub Actions
 
 ## Quickstart
@@ -81,8 +82,8 @@ around.
 
 Ports are the defaults; change any of them in `.env` (copy `.env.example`).
 
-1. **Bring the stack up.** `make up` starts Postgres, Kafka, Debezium Connect, the object store
-   and the consumer. Two init containers register the connector (`PUT`, so re-running is safe)
+1. **Bring the stack up.** `make up` starts Postgres, Kafka, Schema Registry, Debezium Connect,
+   the object store and the consumer. Two init containers register the connector (`PUT`, so re-running is safe)
    and create the bucket.
 2. **Watch the snapshot arrive.** Debezium reads the 500 seeded orders as `op = r` events:
 
@@ -90,7 +91,11 @@ Ports are the defaults; change any of them in `.env` (copy `.env.example`).
    docker compose exec kafka kafka-console-consumer --bootstrap-server localhost:29092 \
      --topic cdc.public.orders --from-beginning --max-messages 3
    curl -s localhost:8083/connectors/orders-connector/status
+   curl -s localhost:8081/subjects/cdc.public.orders-value/versions/latest
    ```
+
+   The messages are binary Protobuf now, so the console shows raw bytes. Kafka UI (step 5) is
+   configured with the registry to browse the schema subjects.
 3. **Change the source.** The mutator advances order statuses, edits amounts, inserts and
    deletes, one transaction per change, and writes a manifest of what it did:
 
@@ -106,8 +111,8 @@ Ports are the defaults; change any of them in `.env` (copy `.env.example`).
    ```
 
    `verify` assumes a fresh stack with one mutator run, which is what `make demo` sets up.
-5. **Optional UI.** `make ui` starts Kafka UI at <http://localhost:8090> (topics, messages,
-   the Connect cluster). The Spark UI of the running consumer is at <http://localhost:4040>.
+5. **Optional UI.** `make ui` starts Kafka UI at <http://localhost:8090> (topics, decoded messages,
+   the schema subjects, the Connect cluster). The Spark UI of the running consumer is at <http://localhost:4040>.
 
 ### Memory budget
 
@@ -120,6 +125,7 @@ Every long-running service has a memory limit in `compose.yaml`, sized for a 16 
 | kafka | 1 GB (heap 512 MB) | 560 MB |
 | connect | 1.25 GB (heap 512 MB) | 840 MB |
 | s3 | 512 MB | 190 MB |
+| schema-registry | 512 MB (heap 256 MB) | not measured yet |
 | consumer (Spark driver 1 GB) | 2.5 GB | 1.7 GB |
 
 `verify` runs in a short-lived `spark-job` container limited to 2 GB.
@@ -141,6 +147,21 @@ Every long-running service has a memory limit in `compose.yaml`, sized for a 16 
   access), so the demo runs on RustFS; any S3-compatible server works by changing the `s3`
   service and the `S3_*` settings.
 
+- **Protobuf and the schema contract.** Debezium writes keys and values through Confluent's
+  Protobuf converter, which registers the value schema in Schema Registry (subject
+  `cdc.public.orders-value`). Each Kafka value starts with a 6-byte header: magic byte 0, the
+  4-byte schema id, and the message index `[0]` as one 0 byte (`Envelope` is the only top-level
+  message). The consumer checks that header in Spark SQL, then decodes the rest with
+  `from_protobuf`. The schema it decodes with is checked in:
+  `src/cdc_demo/proto/orders_value.proto` is the registry's text, and `orders_value.desc` is the
+  descriptor set compiled from it. Containers therefore need neither protoc nor a registry call
+  at run time. `cdc-demo check-schema` (run by `make demo`) asks the registry whether the
+  checked-in schema is compatible with the latest registered one and compares the two texts, so
+  a Debezium upgrade that adds a field shows up as a failed check instead of silent drift. To
+  change the contract: edit the `.proto`, run `make proto`, run the demo. Events with a bad
+  header or a payload that does not decode go to the rejects table (base64 of the value).
+  Proto3 scalars at their zero value decode as null.
+
 Every decision and its reason is logged in [docs/DECISIONS.md](docs/DECISIONS.md); the build
 plan is in [docs/PLAN.md](docs/PLAN.md).
 
@@ -148,11 +169,12 @@ plan is in [docs/PLAN.md](docs/PLAN.md).
 
 ```
 compose.yaml              the whole stack (project name cdc-streaming-demo)
-docker/app.Dockerfile     mutator image and Spark image (jars baked at build time)
+docker/                   mutator and Spark images (jars baked at build time), Connect image
 postgres/initdb/          schema, seeded data, replication role, publication
 debezium/                 connector configuration
 scripts/                  connector registration, bucket creation, demo orchestration
-src/cdc_demo/             the cdc-demo CLI: mutator, Spark ingest, verify
+src/cdc_demo/             the cdc-demo CLI: mutator, Spark ingest, verify, check-schema
+src/cdc_demo/proto/       the Protobuf contract: .proto and compiled descriptor set
 tests/                    unit and property tests; Spark tests behind the `spark` marker
 docs/                     plan and decision log
 ```
@@ -161,6 +183,7 @@ docs/                     plan and decision log
 
 ```bash
 make install      # uv sync --all-extras
+make proto        # recompile the Protobuf descriptor set after editing the .proto
 make lint         # ruff check, ruff format --check, mypy (strict)
 make test-fast    # unit and property tests, no JVM
 make test-spark   # Spark tests (Linux, macOS, WSL or CI; needs Java 17)
@@ -169,7 +192,7 @@ make test-spark   # Spark tests (Linux, macOS, WSL or CI; needs Java 17)
 ## Roadmap
 
 - [x] Minimum shippable: compose stack, mutator, raw CDC log in Delta, end-to-end check
-- [ ] Protobuf on the wire with Confluent Schema Registry and a schema contract test
+- [x] Protobuf on the wire with Confluent Schema Registry and a schema contract test
 - [ ] Current-state table: incremental MERGE from the CDC log with an offset watermark
 - [ ] dbt (DuckDB) staging and marts, and a Streamlit dashboard
 - [ ] Two ways to do CDC: SQL Server CDC read directly by Spark with
