@@ -16,7 +16,7 @@ while [ "$attempt" -lt 20 ]; do
         -H "x-amz-content-sha256: ${EMPTY_SHA}" \
         -X PUT "${S3_ENDPOINT}/${BUCKET}" || true)
     if [ "$code" = "200" ]; then
-        echo "Bucket ${BUCKET} created"
+        echo "Bucket ${BUCKET} is ready"
         exit 0
     fi
     if [ "$code" = "409" ] && grep -q "BucketAlreadyOwnedByYou" "$body"; then

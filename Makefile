@@ -31,7 +31,7 @@ up: ## Start the stack in the background
 	docker compose up -d --build --wait
 
 down: ## Stop the stack and delete its volumes
-	docker compose down -v --remove-orphans
+	docker compose --profile tools --profile ui down -v --remove-orphans
 
 demo: ## End-to-end demo on fresh volumes
 	bash scripts/demo.sh
