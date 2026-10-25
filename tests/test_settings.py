@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
@@ -6,6 +8,7 @@ from cdc_demo.settings import (
     MutatorSettings,
     PostgresSettings,
     S3Settings,
+    WarehouseSettings,
 )
 
 
@@ -57,3 +60,28 @@ def test_secrets_not_in_repr(monkeypatch: pytest.MonkeyPatch) -> None:
         assert "s3cr3t" not in repr(obj)
         assert "s3cr3t" not in str(obj)
     assert pg.connect_kwargs()["password"] == "s3cr3t-pg"
+
+
+@pytest.mark.parametrize(
+    ("root", "want"),
+    [
+        ("s3a://cdc-demo", "s3://cdc-demo"),
+        ("s3a://cdc-demo/", "s3://cdc-demo"),
+        ("s3://cdc-demo", "s3://cdc-demo"),
+        ("file:///tmp/lake/", "file:///tmp/lake"),
+    ],
+)
+def test_duckdb_root(root: str, want: str) -> None:
+    assert LakeSettings(lake_root=root).duckdb_root == want
+
+
+def test_warehouse_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    wh = WarehouseSettings()
+    assert (wh.warehouse_dir, wh.dbt_project_dir) == ("warehouse", "dbt")
+    assert wh.path == Path("warehouse/analytics.duckdb")
+    monkeypatch.setenv("WAREHOUSE_DIR", "/warehouse")
+    monkeypatch.setenv("DBT_PROJECT_DIR", "/opt/dbt")
+    wh = WarehouseSettings()
+    assert wh.path == Path("/warehouse/analytics.duckdb")
+    assert wh.staging_path == Path("/warehouse/analytics.build.duckdb")
+    assert wh.dbt_project_dir == "/opt/dbt"
