@@ -41,7 +41,8 @@ line-length = 100
 target-version = "py312"
 
 [tool.ruff.lint]
-extend-select = ["BLE", "I", "UP", "B", "SIM"]
+# E501: ruff format leaves long comments and strings alone, so the limit needs the lint rule.
+extend-select = ["BLE", "E501", "I", "UP", "B", "SIM"]
 
 [tool.mypy]
 files = ["src"]

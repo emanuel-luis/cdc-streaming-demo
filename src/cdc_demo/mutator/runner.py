@@ -60,15 +60,19 @@ def run_mutations(
     skipped = 0
     conn: psycopg.Connection[Any] | None = None
 
-    def mutate(op: Op) -> int | None:
-        # One reconnect-and-retry loop per mutation. A failed transaction rolled back, so
-        # repeating it never double-applies.
+    def mutate(op: Op, index: int) -> int | None:
+        # One reconnect-and-retry loop per mutation. apply_op raises OperationalError only
+        # before COMMIT, when the server has rolled back, so a retry never double-applies; a
+        # failure during COMMIT (CommitOutcomeUnknownError) is not retried and ends the run.
+        # Each attempt gets a fresh RNG seeded by (seed, index): a retry makes the same choices
+        # as the failed attempt, so a run with retries matches a clean run with the same seed.
         nonlocal conn
         for attempt in range(MAX_RETRIES + 1):
             try:
                 if conn is None:
-                    conn = connect(**pg.connect_kwargs(), autocommit=True)
-                return apply_op(conn, op, rng, settings.cancel_probability)
+                    conn = connect(**pg.connect_kwargs(), autocommit=False)
+                op_rng = random.Random(f"{seed}:{index}")
+                return apply_op(conn, op, op_rng, settings.cancel_probability)
             except psycopg.OperationalError as exc:
                 if conn is not None:
                     conn.close()
@@ -96,7 +100,7 @@ def run_mutations(
             if duration is not None and clock() - start >= duration:
                 break
             op = choose_op(rng, weights)
-            order_id = mutate(op)
+            order_id = mutate(op, done)
             if order_id is None:
                 skipped += 1
             else:
