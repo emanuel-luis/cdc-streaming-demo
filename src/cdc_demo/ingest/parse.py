@@ -5,12 +5,15 @@ from datetime import datetime
 
 from pyspark.sql import Column, DataFrame
 from pyspark.sql import functions as F
+from pyspark.sql.protobuf.functions import from_protobuf
 
-from cdc_demo.ingest.schemas import AMOUNT, CDC_LOG_SCHEMA, ENVELOPE_SCHEMA, REJECTS_SCHEMA
+from cdc_demo.ingest.schemas import AMOUNT, CDC_LOG_SCHEMA, REJECTS_SCHEMA
+from cdc_demo.proto import VALUE_MESSAGE, value_descriptor_set
 
 VALID_OPS = ("c", "u", "d", "r")
 
-REASON_UNPARSEABLE = "unparseable_json"
+REASON_BAD_HEADER = "invalid_wire_header"
+REASON_UNPARSEABLE = "unparseable_protobuf"
 REASON_INVALID_OP = "invalid_op"
 REASON_NO_AFTER = "missing_after_image"
 REASON_NO_ORDER_ID = "null_order_id"
@@ -33,18 +36,42 @@ def _ts(col: Column) -> Column:
 def parse_batch(raw: DataFrame, batch_id: int, ingested_at: datetime) -> ParsedBatch:
     """Split a raw Kafka batch (key, value, topic, partition, offset, timestamp).
 
+    The value is a Confluent-framed Protobuf `Envelope`: magic byte 0, a 4-byte schema id and
+    the message index `[0]` (one 0 byte), then the payload. The schema id is not used: the
+    descriptor is compiled in. `raw_value` in rejects is the base64 of the value bytes.
+
     The session time zone must be UTC: `_partition_date` is derived from a timestamp.
     """
     base = raw.select(
-        F.col("value").cast("string").alias("raw_value"),
+        F.col("value"),
         F.col("topic").alias("kafka_topic"),
         F.col("partition").alias("kafka_partition"),
         F.col("offset").alias("kafka_offset"),
         F.col("timestamp").alias("kafka_timestamp"),
     )
-    tombstones = base.filter(F.col("raw_value").isNull()).count()
-    env = F.from_json("raw_value", ENVELOPE_SCHEMA)
-    parsed = base.filter(F.col("raw_value").isNotNull()).withColumn("env", env)
+    tombstones = base.filter(F.col("value").isNull()).count()
+    value = F.col("value")
+    zero = F.lit(b"\0")
+    header_ok = (
+        (F.length(value) >= 6)
+        & (F.substring(value, 1, 1) == zero)
+        & (F.substring(value, 6, 1) == zero)
+    )
+    # Without a valid header the payload is not decoded at all. PERMISSIVE turns a payload that
+    # fails to decode into a null struct instead of failing the stream.
+    decoded = from_protobuf(
+        F.expr("substring(value, 7)"),
+        VALUE_MESSAGE,
+        binaryDescriptorSet=value_descriptor_set(),
+        options={"mode": "PERMISSIVE"},
+    )
+    env = F.when(header_ok, decoded)
+    parsed = (
+        base.filter(value.isNotNull())
+        .withColumn("header_ok", header_ok)
+        .withColumn("env", env)
+        .withColumn("raw_value", F.base64(value))
+    )
 
     e = F.col("env")
     after, before = e["after"], e["before"]
@@ -62,9 +89,11 @@ def parse_batch(raw: DataFrame, batch_id: int, ingested_at: datetime) -> ParsedB
         | (after["created_at"].isNotNull() & created_at.isNull())
         | (after["updated_at"].isNotNull() & updated_at.isNull())
     )
-    # from_json alone is not enough: on malformed text it returns a struct of nulls, not null.
+    # Proto3 scalars at their zero value decode as null (docs/DECISIONS.md, 26): an empty `op`
+    # is an invalid op and a missing `after` image is null.
     reason = (
-        F.when(F.try_parse_json("raw_value").isNull(), F.lit(REASON_UNPARSEABLE))
+        F.when(~F.col("header_ok"), F.lit(REASON_BAD_HEADER))
+        .when(e.isNull(), F.lit(REASON_UNPARSEABLE))
         .when(~valid_op, F.lit(REASON_INVALID_OP))
         .when(needs_after & after.isNull(), F.lit(REASON_NO_AFTER))
         .when(order_id.isNull(), F.lit(REASON_NO_ORDER_ID))

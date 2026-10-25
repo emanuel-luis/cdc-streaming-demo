@@ -1,7 +1,7 @@
-from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+from protobuf_support import fixture_event, kafka_value
 from pyspark.sql import SparkSession
 
 from cdc_demo.ingest.writer import BatchWriter
@@ -12,26 +12,25 @@ pytestmark = pytest.mark.spark
 TOPIC = "cdc.public.orders"
 
 
-def make_raw(spark: SparkSession, values: list[str | None], first_offset: int = 0):  # type: ignore[no-untyped-def]
+def value_of(name: str) -> bytes:
+    return kafka_value(fixture_event(name))
+
+
+def make_raw(spark: SparkSession, values: list[bytes | None], first_offset: int = 0):  # type: ignore[no-untyped-def]
     from datetime import UTC, datetime
 
     now = datetime(2026, 10, 26, tzinfo=UTC)
-    rows = [
-        (None, None if v is None else v.encode(), TOPIC, 0, first_offset + i, now)
-        for i, v in enumerate(values)
-    ]
+    rows = [(None, v, TOPIC, 0, first_offset + i, now) for i, v in enumerate(values)]
     return spark.createDataFrame(
         rows,
         "key binary, value binary, topic string, partition int, offset long, timestamp timestamp",
     )
 
 
-def test_batch_written_once_even_when_retried(
-    spark: SparkSession, tmp_path: Path, fixture_text: Callable[[str], str]
-) -> None:
+def test_batch_written_once_even_when_retried(spark: SparkSession, tmp_path: Path) -> None:
     lake = LakeSettings(lake_root=tmp_path.as_uri())
     writer = BatchWriter(lake, "test-app-v1", TOPIC, run_id="run-1")
-    values = [fixture_text("create"), fixture_text("update"), None, "{broken"]
+    values = [value_of("create"), value_of("update"), None, b"{broken"]
     raw = make_raw(spark, values)
 
     writer(raw, 0)
@@ -54,7 +53,7 @@ def test_batch_written_once_even_when_retried(
     assert (run["min_offset"], run["max_offset"], run["run_id"]) == (0, 3, "run-1")
 
     # A new batch id with new offsets is appended normally.
-    writer(make_raw(spark, [fixture_text("delete")], first_offset=4), 1)
+    writer(make_raw(spark, [value_of("delete")], first_offset=4), 1)
     assert count(lake.cdc_log) == 3
     assert count(lake.ingest_runs) == 2
     ids = spark.read.format("delta").load(lake.cdc_log).select("event_id").distinct().count()
