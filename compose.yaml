@@ -1,11 +1,11 @@
 # Memory limits, sized for a 16 GB laptop (long-running services: 6.0 GB in total):
 #   postgres 256m | kafka 1g (heap 512m) | schema-registry 512m (heap 256m) |
 #   connect 1280m (heap 512m) | s3 512m | consumer 2560m (driver 1g).
-# On demand: spark-job 2560m and mutator 256m (profile tools), kafka-ui 512m (profile ui),
-#   curl init containers 64m each.
+# On demand: kafka-ui 512m and dashboard 512m (profile ui); spark-job 2560m, analytics 1g
+#   (dbt's DuckDB capped at 512MB) and mutator 256m (profile tools); curl init containers 64m.
 # Peaks measured during `make demo` on 2026-10-25: consumer 2.1 GB, spark-job 2.0 GB (under
 #   the old 2 GB limit), connect 1.03 GB, kafka 0.64 GB, schema-registry 0.34 GB,
-#   s3 0.14 GB, postgres 0.07 GB, mutator 0.04 GB.
+#   s3 0.14 GB, postgres 0.07 GB, mutator 0.04 GB. analytics and dashboard: not measured yet.
 name: cdc-streaming-demo
 
 x-app-env: &app-env
@@ -273,6 +273,61 @@ services:
       disable: true
     networks: [demo]
 
+  analytics:
+    # Builds the marts (dbt + DuckDB) into the warehouse volume. Own image tag: the dashboard
+    # service below reuses it.
+    build:
+      context: .
+      dockerfile: docker/app.Dockerfile
+      target: analytics
+    image: cdc-demo-analytics:local
+    mem_limit: 1g
+    profiles: [tools]
+    depends_on:
+      s3:
+        condition: service_healthy
+    environment:
+      <<: *app-env
+      WAREHOUSE_DIR: /warehouse
+    volumes:
+      - demo_runs:/runs
+      - warehouse:/warehouse
+    networks: [demo]
+
+  dashboard:
+    # Runs the image built by `analytics` (`make dashboard` builds it); it never builds its own.
+    image: cdc-demo-analytics:local
+    pull_policy: never
+    mem_limit: 512m
+    profiles: [ui]
+    entrypoint: ["streamlit"]
+    command:
+      - run
+      - /opt/dashboard/app.py
+      - --server.address=0.0.0.0
+      - --server.port=8501
+      - --server.headless=true
+      - --server.fileWatcherType=none
+      - --browser.gatherUsageStats=false
+    environment:
+      WAREHOUSE_DIR: /warehouse
+    ports:
+      - "127.0.0.1:${DASHBOARD_PORT:-8501}:8501"
+    volumes:
+      # Read-only: only `analytics` writes the warehouse (it renames a finished file into place).
+      - warehouse:/warehouse:ro
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health', timeout=4)"
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    networks: [demo]
+
   kafka-ui:
     image: ghcr.io/kafbat/kafka-ui:v1.5.0
     mem_limit: 512m
@@ -302,3 +357,4 @@ volumes:
   kafka_data:
   s3_data:
   demo_runs:
+  warehouse:

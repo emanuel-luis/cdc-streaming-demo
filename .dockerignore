@@ -11,3 +11,6 @@ tests
 docs
 data
 *.log
+warehouse
+dbt/target
+dbt/logs
