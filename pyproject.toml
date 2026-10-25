@@ -23,6 +23,13 @@ dependencies = [
 [project.optional-dependencies]
 # Exact pins: the container bakes jars that match these versions.
 spark = ["pyspark==4.2.0", "delta-spark==4.4.1"]
+# Warehouse build and dashboard (phase 4); the analytics image installs only this extra.
+analytics = [
+    "dbt-core>=1.12.6,<1.13",
+    "dbt-duckdb>=1.11,<1.12",
+    "duckdb>=2.0,<2.1",
+    "streamlit>=1.66.1,<2",
+]
 
 [project.scripts]
 cdc-demo = "cdc_demo.cli:app"
@@ -34,8 +41,9 @@ dev = [
     "hypothesis>=6",
     "ruff>=0.16",
     "mypy>=2.0",
-    "grpcio-tools>=1.84.1",
-    "protobuf>=7.36.2",
+    # dbt-common needs protobuf<7; grpcio-tools 1.83+ needs protobuf>=7.
+    "grpcio-tools>=1.80,<1.83",
+    "protobuf>=6.33.5,<7",
 ]
 
 [tool.ruff]
