@@ -1,0 +1,63 @@
+[build-system]
+requires = ["uv_build>=0.13,<0.14"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "cdc_demo"
+
+[project]
+name = "cdc-streaming-demo"
+version = "0.1.0"
+description = "Change data capture demo: Postgres, Debezium, Kafka, Spark Structured Streaming, Delta Lake."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Emanuel Luis" }]
+dependencies = [
+    "psycopg[binary]>=3.3",
+    "pydantic-settings>=2.16",
+    "typer>=0.27",
+]
+
+[project.optional-dependencies]
+# Exact pins: the container bakes jars that match these versions.
+spark = ["pyspark==4.2.0", "delta-spark==4.4.1"]
+
+[project.scripts]
+cdc-demo = "cdc_demo.cli:app"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-timeout>=2",
+    "hypothesis>=6",
+    "ruff>=0.16",
+    "mypy>=2.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+extend-select = ["BLE", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+files = ["src"]
+strict = true
+python_version = "3.12"
+enable_error_code = ["ignore-without-code"]
+
+[[tool.mypy.overrides]]
+module = ["delta", "delta.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["-ra", "--strict-markers", "--strict-config", "-m", "not spark and not integration"]
+timeout = 300
+markers = [
+    "spark: starts a local JVM; Linux, WSL or CI only",
+    "integration: needs the compose stack",
+]
