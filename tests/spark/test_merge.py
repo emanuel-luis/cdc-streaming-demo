@@ -283,15 +283,15 @@ def test_merge_ignores_cdc_log_versions_after_the_pinned_read(
 def test_order_deleted_in_one_run_can_be_reinserted_in_the_next(
     spark: SparkSession, lake: LakeSettings
 ) -> None:
-    append_log(
-        spark,
-        lake,
-        [event(1, "c", lsn=1, offset=0), event(1, "d", lsn=2, offset=1)],
-    )
-    run_merge(spark, lake)
+    append_log(spark, lake, [event(1, "c", lsn=1, offset=0)])
+    assert counts(run_merge(spark, lake)) == (1, 1, 1, 0, 0)
+    assert set(current(spark, lake)) == {1}
+
+    # The row is in the table, so this MERGE really deletes it.
+    append_log(spark, lake, [event(1, "d", lsn=2, offset=1)])
+    assert counts(run_merge(spark, lake)) == (1, 1, 0, 0, 1)
     assert current(spark, lake) == {}
 
     append_log(spark, lake, [event(1, "c", lsn=5, offset=2, status="confirmed", amount="20.00")])
-    result = run_merge(spark, lake)
-    assert counts(result) == (1, 1, 1, 0, 0)
+    assert counts(run_merge(spark, lake)) == (1, 1, 1, 0, 0)
     assert current(spark, lake) == {1: ("confirmed", Decimal("20.00"), "c", 2)}
