@@ -11,7 +11,13 @@ from typing import Any
 
 import psycopg
 
-from cdc_demo.settings import LakeSettings, PostgresSettings, S3Settings, SparkSettings
+from cdc_demo.settings import (
+    LakeSettings,
+    PostgresSettings,
+    S3Settings,
+    SparkSettings,
+    SqlServerSettings,
+)
 
 log = logging.getLogger(__name__)
 
@@ -150,20 +156,35 @@ def run_verify_current(
     pg: PostgresSettings,
     s3: S3Settings | None,
     spark_settings: SparkSettings,
+    *,
+    sql: SqlServerSettings | None = None,
 ) -> int:
-    """Exit code: 0 when the current table equals Postgres before the timeout, 1 otherwise."""
+    """Exit code: 0 when the current table equals the source before the timeout, 1 otherwise.
+
+    With `sql` the source is SQL Server and `pg` is not used.
+    """
     from cdc_demo.spark.session import build_session
+
+    fetch_source: Callable[[], Rows]
+    if sql is None:
+        source_name = "Postgres"
+        fetch_source = lambda: fetch_postgres(pg)
+    else:
+        from cdc_demo.mssql.source_db import fetch_orders
+
+        source_name = "SQL Server"
+        fetch_source = lambda: fetch_orders(sql)
 
     spark = build_session(spark_settings, s3, kafka=False, app_name="cdc-demo-verify-current")
     try:
         diff = wait_for_match(
-            lambda: compare_rows(fetch_current(spark, lake), fetch_postgres(pg)), timeout
+            lambda: compare_rows(fetch_current(spark, lake), fetch_source()), timeout
         )
     finally:
         spark.stop()
     print(diff.report())
     if diff.ok:
-        print("\nOK: the current table matches Postgres row by row")
+        print(f"\nOK: the current table matches {source_name} row by row")
         return 0
-    print("\nMISMATCH: the current table differs from Postgres")
+    print(f"\nMISMATCH: the current table differs from {source_name}")
     return 1

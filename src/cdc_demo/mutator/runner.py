@@ -6,6 +6,7 @@ import secrets
 import time
 import uuid
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -23,25 +24,50 @@ MAX_RETRIES = 6
 BACKOFF_BASE_S = 0.5
 
 
+@dataclass(frozen=True)
+class DbOps:
+    """What the loop needs from a database: a new connection, one mutation, retryable errors."""
+
+    connect: Callable[[], Any]
+    apply_op: Callable[[Any, Op, random.Random, float], int | None]
+    transient: tuple[type[BaseException], ...]
+
+
+def postgres_ops(
+    pg: PostgresSettings, connect: Callable[..., psycopg.Connection[Any]] = psycopg.connect
+) -> DbOps:
+    return DbOps(
+        connect=lambda: connect(**pg.connect_kwargs(), autocommit=False),
+        # Looked up on each call, so tests can replace `apply_op` in this module.
+        apply_op=lambda conn, op, rng, p: apply_op(conn, op, rng, p),
+        transient=(psycopg.OperationalError,),
+    )
+
+
 def write_manifest(manifest: Manifest, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(manifest.model_dump_json(indent=2) + "\n", encoding="utf-8")
 
 
 def run_mutations(
-    pg: PostgresSettings,
+    pg: PostgresSettings | None,
     settings: MutatorSettings,
     *,
     count: int | None = None,
     duration: float | None = None,
     rate: float | None = None,
     seed: int | None = None,
+    ops: DbOps | None = None,
     connect: Callable[..., psycopg.Connection[Any]] = psycopg.connect,
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
 ) -> Manifest:
     if (count is None) == (duration is None):
         raise ValueError("pass exactly one of count or duration")
+    if ops is None:
+        if pg is None:
+            raise ValueError("pass Postgres settings or db ops")
+        ops = postgres_ops(pg, connect)
     rate = rate if rate is not None else settings.rate
     if rate <= 0:
         raise ValueError("rate must be positive")
@@ -58,7 +84,7 @@ def run_mutations(
     started_at = datetime.now(UTC)
     counts = {"c": 0, "u": 0, "d": 0}
     skipped = 0
-    conn: psycopg.Connection[Any] | None = None
+    conn: Any = None
 
     def mutate(op: Op, index: int) -> int | None:
         # One reconnect-and-retry loop per mutation. apply_op raises OperationalError only
@@ -70,10 +96,10 @@ def run_mutations(
         for attempt in range(MAX_RETRIES + 1):
             try:
                 if conn is None:
-                    conn = connect(**pg.connect_kwargs(), autocommit=False)
+                    conn = ops.connect()
                 op_rng = random.Random(f"{seed}:{index}")
-                return apply_op(conn, op, op_rng, settings.cancel_probability)
-            except psycopg.OperationalError as exc:
+                return ops.apply_op(conn, op, op_rng, settings.cancel_probability)
+            except ops.transient as exc:
                 if conn is not None:
                     conn.close()
                     conn = None

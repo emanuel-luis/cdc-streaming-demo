@@ -1,5 +1,6 @@
 """`cdc-demo` command line. Spark, dbt and DuckDB modules are imported inside the commands."""
 
+from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
 
@@ -11,6 +12,13 @@ from cdc_demo.settings import LakeSettings, S3Settings, WarehouseSettings
 app = typer.Typer(no_args_is_help=True, add_completion=False, help="CDC streaming demo.")
 
 
+class Source(StrEnum):
+    """The source database: Postgres (Debezium path) or SQL Server (direct Spark path)."""
+
+    postgres = "postgres"
+    mssql = "mssql"
+
+
 @app.command()
 def mutate(
     count: Annotated[int | None, typer.Option(min=1, help="Number of mutations.")] = None,
@@ -20,8 +28,11 @@ def mutate(
     manifest: Annotated[Path, typer.Option(help="Where to write the run manifest.")] = Path(
         "runs/manifest.json"
     ),
+    target: Annotated[
+        Source, typer.Option(help="Database to mutate (mssql needs the spark image).")
+    ] = Source.postgres,
 ) -> None:
-    """Mutate Postgres.orders, one transaction per change, and write a manifest."""
+    """Mutate orders in Postgres or SQL Server, one transaction per change, and write a manifest."""
     from cdc_demo.mutator.runner import run_mutations, write_manifest
     from cdc_demo.settings import MutatorSettings, PostgresSettings
 
@@ -30,13 +41,21 @@ def mutate(
     if count is None and duration is None:
         count = 100
     configure_logging()
+    if target is Source.mssql:
+        from cdc_demo.mutator.mssql_db import sqlserver_ops
+        from cdc_demo.settings import SqlServerSettings
+
+        pg, ops = None, sqlserver_ops(SqlServerSettings())
+    else:
+        pg, ops = PostgresSettings(), None
     result = run_mutations(
-        PostgresSettings(),
+        pg,
         MutatorSettings(),
         count=count,
         duration=duration,
         rate=rate,
         seed=seed,
+        ops=ops,
     )
     write_manifest(result, manifest)
     typer.echo(f"manifest written to {manifest}")
@@ -69,13 +88,36 @@ def consume(
 
 
 @app.command()
+def consume_mssql(
+    available_now: Annotated[
+        bool, typer.Option("--available-now", help="Drain the change table, then stop.")
+    ] = False,
+) -> None:
+    """Run the SQL Server job: snapshot once, then mssql_cdc streaming into the CDC log."""
+    from cdc_demo.mssql.job import run_mssql_consumer
+    from cdc_demo.settings import ConsumerSettings, SparkSettings, SqlServerSettings
+
+    configure_logging()
+    lake = LakeSettings()
+    run_mssql_consumer(
+        sql=SqlServerSettings(),
+        lake=lake,
+        consumer=ConsumerSettings(),
+        spark_settings=SparkSettings(),
+        s3=_s3_for(lake),
+        available_now=available_now,
+    )
+
+
+@app.command()
 def verify(
     manifest: Annotated[Path, typer.Option(help="Manifest written by `mutate`.")],
     snapshot_rows: Annotated[int, typer.Option(min=0, help="Rows in the seeded snapshot.")] = 500,
     timeout: Annotated[float, typer.Option(min=0, help="Seconds to wait for the lake.")] = 300,
+    source: Annotated[Source, typer.Option(help="Source database.")] = Source.postgres,
 ) -> None:
-    """Poll the lake and Postgres until they match the manifest; exit 1 on timeout."""
-    from cdc_demo.settings import PostgresSettings, SparkSettings
+    """Poll the lake and the source until they match the manifest; exit 1 on timeout."""
+    from cdc_demo.settings import PostgresSettings, SparkSettings, SqlServerSettings
     from cdc_demo.verify import run_verify
 
     configure_logging()
@@ -88,6 +130,7 @@ def verify(
         PostgresSettings(),
         _s3_for(lake),
         SparkSettings(),
+        sql=SqlServerSettings() if source is Source.mssql else None,
     )
     raise typer.Exit(code)
 
@@ -112,15 +155,34 @@ def merge() -> None:
 @app.command()
 def verify_current(
     timeout: Annotated[float, typer.Option(min=0, help="Seconds to wait for a match.")] = 0,
+    source: Annotated[Source, typer.Option(help="Source database.")] = Source.postgres,
 ) -> None:
-    """Compare the current table with Postgres row by row; exit 1 on any difference."""
-    from cdc_demo.settings import PostgresSettings, SparkSettings
+    """Compare the current table with the source row by row; exit 1 on any difference."""
+    from cdc_demo.settings import PostgresSettings, SparkSettings, SqlServerSettings
     from cdc_demo.verify_current import run_verify_current
 
     configure_logging()
     lake = LakeSettings()
-    code = run_verify_current(timeout, lake, PostgresSettings(), _s3_for(lake), SparkSettings())
+    code = run_verify_current(
+        timeout,
+        lake,
+        PostgresSettings(),
+        _s3_for(lake),
+        SparkSettings(),
+        sql=SqlServerSettings() if source is Source.mssql else None,
+    )
     raise typer.Exit(code)
+
+
+@app.command()
+def lag_report() -> None:
+    """Print p50, p95 and max lag (batch finish minus source commit) of the CDC log events."""
+    from cdc_demo.lag import run_lag_report
+    from cdc_demo.settings import SparkSettings
+
+    configure_logging()
+    lake = LakeSettings()
+    raise typer.Exit(run_lag_report(lake, _s3_for(lake), SparkSettings()))
 
 
 @app.command()

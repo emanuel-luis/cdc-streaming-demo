@@ -52,3 +52,9 @@ def test_poll_waits_then_gives_up() -> None:
         e, lambda: {"a": 0}, timeout=25, sleep=lambda _: None, clock=lambda: float(next(ticks))
     )
     assert problems
+
+
+def test_sql_server_source_uses_its_own_row_key() -> None:
+    e = expected_from_manifest(manifest(), 500, "sqlserver_rows")
+    assert e["sqlserver_rows"] == 508 and "postgres_rows" not in e
+    assert compare(e, dict(e)) == []
