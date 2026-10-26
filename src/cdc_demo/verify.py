@@ -10,23 +10,26 @@ import psycopg
 
 from cdc_demo.mutator.db import count_orders
 from cdc_demo.mutator.model import Manifest
-from cdc_demo.settings import LakeSettings, PostgresSettings, S3Settings, SparkSettings
+from cdc_demo.settings import (
+    LakeSettings,
+    PostgresSettings,
+    S3Settings,
+    SparkSettings,
+    SqlServerSettings,
+)
 
 log = logging.getLogger(__name__)
 
-# Same keys for expected and actual. cdc_<op> counts events by op in the CDC log.
-KEYS = (
-    "cdc_r",
-    "cdc_c",
-    "cdc_u",
-    "cdc_d",
-    "rejects",
-    "duplicate_event_ids",
-    "postgres_rows",
-)
+# Same keys for expected and actual. cdc_<op> counts events by op in the CDC log. The last key
+# counts the rows of the source database: `postgres_rows`, or `sqlserver_rows` (--source mssql).
+POSTGRES_ROWS = "postgres_rows"
+SQLSERVER_ROWS = "sqlserver_rows"
+KEYS = ("cdc_r", "cdc_c", "cdc_u", "cdc_d", "rejects", "duplicate_event_ids", POSTGRES_ROWS)
 
 
-def expected_from_manifest(manifest: Manifest, snapshot_rows: int) -> dict[str, int]:
+def expected_from_manifest(
+    manifest: Manifest, snapshot_rows: int, source_rows_key: str = POSTGRES_ROWS
+) -> dict[str, int]:
     c, u, d = manifest.counts.c, manifest.counts.u, manifest.counts.d
     return {
         "cdc_r": snapshot_rows,
@@ -35,7 +38,7 @@ def expected_from_manifest(manifest: Manifest, snapshot_rows: int) -> dict[str, 
         "cdc_d": d,
         "rejects": 0,
         "duplicate_event_ids": 0,
-        "postgres_rows": snapshot_rows + c - d,
+        source_rows_key: snapshot_rows + c - d,
     }
 
 
@@ -62,12 +65,15 @@ def format_table(expected: dict[str, int], actual: dict[str, int]) -> str:
 
 
 def collect_actuals(
-    spark: Any, lake: LakeSettings, pg: PostgresSettings
+    spark: Any,
+    lake: LakeSettings,
+    count_source_rows: Callable[[], int],
+    source_rows_key: str = POSTGRES_ROWS,
 ) -> dict[str, int]:  # spark: SparkSession, untyped to keep this module importable without pyspark
     from delta.tables import DeltaTable
     from pyspark.sql import functions as F
 
-    actual = dict.fromkeys(KEYS, 0)
+    actual = dict.fromkeys((*KEYS[:-1], source_rows_key), 0)
     if DeltaTable.isDeltaTable(spark, lake.cdc_log):
         log_df = spark.read.format("delta").load(lake.cdc_log)
         for row in log_df.groupBy("op").count().collect():
@@ -77,9 +83,13 @@ def collect_actuals(
         actual["duplicate_event_ids"] = total - distinct
     if DeltaTable.isDeltaTable(spark, lake.rejects):
         actual["rejects"] = spark.read.format("delta").load(lake.rejects).count()
-    with psycopg.connect(**pg.connect_kwargs()) as conn:
-        actual["postgres_rows"] = count_orders(conn)
+    actual[source_rows_key] = count_source_rows()
     return actual
+
+
+def _count_postgres(pg: PostgresSettings) -> int:
+    with psycopg.connect(**pg.connect_kwargs()) as conn:
+        return count_orders(conn)
 
 
 def poll(
@@ -107,20 +117,38 @@ def run_verify(
     pg: PostgresSettings,
     s3: S3Settings | None,
     spark_settings: SparkSettings,
+    *,
+    sql: SqlServerSettings | None = None,
 ) -> int:
-    """Exit code: 0 when everything matches before the timeout, 1 otherwise."""
+    """Exit code: 0 when everything matches before the timeout, 1 otherwise.
+
+    With `sql` the source is SQL Server and `pg` is not used.
+    """
     from cdc_demo.spark.session import build_session
 
     manifest = Manifest.model_validate_json(manifest_path.read_text(encoding="utf-8"))
-    expected = expected_from_manifest(manifest, snapshot_rows)
+    count_source: Callable[[], int]
+    if sql is None:
+        key = POSTGRES_ROWS
+        source_name = "Postgres"
+        count_source = lambda: _count_postgres(pg)
+    else:
+        from cdc_demo.mssql.source_db import count_orders as count_sqlserver
+
+        key = SQLSERVER_ROWS
+        source_name = "SQL Server"
+        count_source = lambda: count_sqlserver(sql)
+    expected = expected_from_manifest(manifest, snapshot_rows, key)
     spark = build_session(spark_settings, s3, kafka=False, app_name="cdc-demo-verify")
     try:
-        actual, problems = poll(expected, lambda: collect_actuals(spark, lake, pg), timeout)
+        actual, problems = poll(
+            expected, lambda: collect_actuals(spark, lake, count_source, key), timeout
+        )
     finally:
         spark.stop()
     print(format_table(expected, actual))
     if problems:
         print("\nMISMATCH:\n" + "\n".join(problems))
         return 1
-    print("\nOK: lake and Postgres match the mutator manifest")
+    print(f"\nOK: lake and {source_name} match the mutator manifest")
     return 0

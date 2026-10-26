@@ -55,3 +55,7 @@ updates:
       # A Postgres major upgrade needs a dump and restore or fresh volumes.
       - dependency-name: postgres
         update-types: ["version-update:semver-major"]
+      # SQL Server 2025 renamed the Developer edition PIDs and the demo is tested on 2022
+      # (decision 46); a new major is a deliberate change.
+      - dependency-name: mcr.microsoft.com/mssql/server
+        update-types: ["version-update:semver-major"]

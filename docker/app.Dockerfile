@@ -1,5 +1,6 @@
 # syntax=docker/dockerfile:1
-# Three runtime targets from one lock file: `mutator` (no JVM), `spark` (JRE, pyspark, baked jars)
+# Three runtime targets from one lock file: `mutator` (no JVM), `spark` (JRE, pyspark, baked jars,
+# mssql-cdc-pyspark with its driver)
 # and `analytics` (dbt, DuckDB with its extensions, Streamlit; no JVM).
 
 FROM ghcr.io/astral-sh/uv:0.13.5 AS uv
@@ -28,11 +29,11 @@ FROM build-base AS build-spark
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
     --mount=type=bind,source=uv.lock,target=uv.lock \
-    uv sync --locked --no-dev --no-editable --no-install-project --extra spark
+    uv sync --locked --no-dev --no-editable --no-install-project --extra spark --extra mssql
 COPY pyproject.toml uv.lock README.md LICENSE ./
 COPY src ./src
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --no-dev --no-editable --extra spark
+    uv sync --locked --no-dev --no-editable --extra spark --extra mssql
 
 FROM build-base AS build-analytics
 RUN --mount=type=cache,target=/root/.cache/uv \
@@ -67,6 +68,10 @@ ENV JAVA_HOME=/opt/java/openjdk \
     SPARK_IVY_DIR=/opt/spark-ivy
 ENV PATH="${JAVA_HOME}/bin:${PATH}"
 COPY --from=build-spark /opt/venv /opt/venv
+# mssql-python (phase 5) loads these system libraries; its ODBC driver ships in the wheel.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libltdl7 libkrb5-3 libgssapi-krb5-2 \
+    && rm -rf /var/lib/apt/lists/*
 RUN java -version \
     && mkdir /opt/spark-ivy \
     && chown app:app /opt/spark-ivy

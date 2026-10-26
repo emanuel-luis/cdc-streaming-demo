@@ -104,3 +104,27 @@ def test_commit_outcome_unknown_is_not_retried(monkeypatch: pytest.MonkeyPatch) 
 def test_needs_exactly_one_limit(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(ValueError):
         run(monkeypatch, None, [], seed=1)
+
+
+def test_loop_runs_on_a_db_ops_bundle(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Down(Exception):
+        pass
+
+    calls: list[str] = []
+
+    def apply(conn: Any, op: str, rng: Any, p: float) -> int:
+        calls.append(op)
+        if len(calls) == 1:
+            raise Down("dropped")
+        return 1
+
+    connects: list[int] = []
+    ops = runner.DbOps(
+        connect=lambda: connects.append(1) or FakeConn(), apply_op=apply, transient=(Down,)
+    )
+    m = runner.run_mutations(
+        None, MutatorSettings(), count=2, seed=5, ops=ops, sleep=lambda _: None
+    )
+    assert len(connects) == 2 and m.counts.c + m.counts.u + m.counts.d == 2
+    with pytest.raises(ValueError, match="db ops"):
+        runner.run_mutations(None, MutatorSettings(), count=1, seed=5)
