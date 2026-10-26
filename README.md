@@ -183,8 +183,8 @@ Every long-running service has a memory limit in `compose.yaml`, sized for a 16 
 | consumer (Spark driver 1 GB) | 2.5 GB | 2.3 GB |
 | analytics (short-lived, DuckDB capped at 512 MB) | 1 GB | 200 MB |
 | dashboard (on demand) | 512 MB | 52 MB |
-| mssql (SQL Server path only, server memory capped at 1536 MB) | 2 GB | [to be measured] |
-| mssql-consumer (SQL Server path only, Spark driver 1 GB) | 2.5 GB | [to be measured] |
+| mssql (SQL Server path only, server memory capped at 1536 MB) | 2 GB | 1.01 GB |
+| mssql-consumer (SQL Server path only, Spark driver 1 GB) | 2.5 GB | 2.49 GB |
 
 `verify`, `merge` and `verify-current` run in short-lived `spark-job` containers with the
 consumer's limit, 2.5 GB (Spark driver 1 GB). Both Spark containers grow toward their limit:
@@ -237,7 +237,7 @@ How the SQL Server path works:
 | --- | --- | --- |
 | Long-running services | postgres, kafka, schema-registry, connect, s3, consumer | mssql, s3, consumer |
 | Memory limits in `compose.yaml` (long-running) | 6 GB in total (postgres 256 MB, kafka 1 GB, schema-registry 512 MB, connect 1.25 GB, s3 512 MB, consumer 2.5 GB) | 5 GB in total (mssql 2 GB, s3 512 MB, consumer 2.5 GB) |
-| Measured peak memory | About 6.2 GB in one sample with a `spark-job` running (2026-10-25; per-service peaks under Memory budget) | [to be measured] (`make stats` during `make mssql-demo`) |
+| Measured peak memory | About 6.2 GB in one sample with a `spark-job` running (2026-10-25; per-service peaks under Memory budget) | About 5.1 GB in one sample with an `mssql-job` running (2026-10-26) |
 | Where the changes are read | the Postgres WAL, through a replication slot | the change table `cdc.dbo_orders_CT`, filled by the CDC capture job inside the source database |
 | Replay buffer | the Kafka topic | the change table, trimmed by the CDC cleanup job |
 | Order of events | `(source_lsn, kafka_offset)`, Postgres LSN and the Kafka offset | `(_start_lsn, _command_id, _seqval, _operation)` from the library, turned into a dense `kafka_offset`; `source_lsn` is the packed commit LSN |
@@ -245,7 +245,7 @@ How the SQL Server path works:
 | Delete | a delete event, then a tombstone the consumer skips and counts | a delete row only, so `tombstones` is always 0; its values become the before image |
 | Initial snapshot | Debezium's consistent snapshot, as `r` events through Kafka | `mssql_cdc_snapshot` at a recorded LSN, read under READ COMMITTED, written once as `r` events |
 | Schema change | the Protobuf contract is checked in and `check-schema` fails on drift | the change table keeps its captured columns; the mapping fails loudly when the source columns differ from the expected ones; a new capture instance is the library's procedure ([schema changes guide](https://emanuel-luis.github.io/mssql-cdc-pyspark/guides/schema-changes/)) |
-| Commit to lake lag (p50 / p95 / max) | [to be measured] (`make lag` after `make demo`) | [to be measured] (`make lag` after `make mssql-demo`) |
+| Commit to lake lag (p50 / p95 / max) | 41.7 s / 46.2 s / 46.7 s over 200 events (`make lag` after `make demo`, 2026-10-26) | 29.0 s / 43.5 s / 44.0 s over 200 events (`make lag` after `make mssql-demo`, 2026-10-26) |
 | Platform and license | `make demo` needs no EULA acceptance | SQL Server Developer EULA, `linux/amd64` image |
 
 Notes on the table:
@@ -272,8 +272,8 @@ Notes on the table:
   ([about change data capture](https://learn.microsoft.com/sql/relational-databases/track-changes/about-change-data-capture-sql-server)),
   which is why the demo container sets `MSSQL_AGENT_ENABLED`. Debezium adds a slot and a
   publication to Postgres instead.
-- The numbers marked `[to be measured]` come from one run of the commands in their cells on
-  one laptop; they will be filled in with the date of the run.
+- The measured numbers come from one run of the commands in their cells on one laptop, on the
+  dates shown. With a single run each, they show orders of magnitude, not a benchmark.
 
 ## Design notes
 
