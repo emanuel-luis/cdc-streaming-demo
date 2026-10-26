@@ -9,7 +9,8 @@
 #   postgres 0.07 GB, dashboard 0.05 GB, mutator 0.04 GB.
 # Profile `mssql` (phase 5; run it instead of the Debezium path, never next to it): mssql 2g
 #   (server memory capped at 1536 MB), mssql-consumer 2560m, mssql-job 2560m, mssql-init 256m
-#   (runs once). Peaks: [to be measured] by `make mssql-demo` and `make stats`.
+#   (runs once). Peaks during `make mssql-demo` on 2026-10-26: mssql 1.01 GB, mssql-consumer
+#   2.49 GB and mssql-job 2.33 GB (Spark containers grow toward their limit), analytics 0.21 GB.
 name: cdc-streaming-demo
 
 x-app-env: &app-env
