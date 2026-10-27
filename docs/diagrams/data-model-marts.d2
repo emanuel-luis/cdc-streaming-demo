@@ -1,0 +1,86 @@
+# The four marts and their keys, with the key columns of the lake tables each one is built from.
+# Columns from dbt/models/marts/_marts.yml (enforced contracts) and the mart SQL; keys follow the
+# unique, not_null and unique_combination tests there. No relationships test exists, so the arrows
+# are lineage drawn dashed. The lake tables in full are in data-model.d2.
+...@_style
+
+title: "Data model: the marts and the lake keys they come from" {
+  shape: text
+  near: top-center
+  style: {font-size: 24; bold: true}
+}
+
+note: "Left: schema marts in analytics.duckdb, contracts enforced. Right: the Delta tables, keys only.\nPK: the key the dbt unique and unique-combination tests check. Dashed arrow: the column a\nmart row is built from; no foreign key is enforced. Every mart column is listed in _marts.yml." {
+  shape: text
+  near: bottom-center
+  style.font-size: 14
+}
+
+direction: right
+
+dim_orders_current: {
+  shape: sql_table
+  order_id: bigint {constraint: primary_key}
+  customer_id: integer
+  status: varchar
+  amount: "decimal(12,2)"
+  merged_at: timestamptz
+}
+
+fct_order_status_changes: {
+  shape: sql_table
+  event_id: varchar {constraint: primary_key}
+  order_id: bigint
+  op: "varchar (c, u, d)"
+  from_status: varchar
+  to_status: varchar
+  changed_at: timestamptz
+}
+
+fct_order_activity_hourly: {
+  shape: sql_table
+  activity_hour: timestamptz {constraint: primary_key}
+  op: "varchar (r, c, u, d)" {constraint: primary_key}
+  events: bigint
+  distinct_orders: bigint
+}
+
+fct_pipeline_runs: {
+  shape: sql_table
+  component: "varchar (ingest, merge)" {constraint: primary_key}
+  run_id: varchar {constraint: primary_key}
+  batch_id: "bigint (null for merge)" {constraint: primary_key}
+  duration_seconds: double
+  input_rows: bigint
+  output_rows: bigint
+  rejected_rows: bigint
+}
+
+current_orders: "current/orders" {
+  shape: sql_table
+  order_id: bigint {constraint: primary_key}
+}
+
+orders_cdc_log: "raw/orders_cdc_log" {
+  shape: sql_table
+  event_id: string {constraint: primary_key}
+  source_ts_ms: bigint
+}
+
+ingest_runs: "_meta/ingest_runs" {
+  shape: sql_table
+  run_id: string {constraint: primary_key}
+  batch_id: bigint {constraint: primary_key}
+}
+
+merge_runs: "_meta/merge_runs" {
+  shape: sql_table
+  run_id: string {constraint: primary_key}
+}
+
+dim_orders_current.order_id -> current_orders.order_id {class: meta}
+fct_order_status_changes.event_id -> orders_cdc_log.event_id {class: meta}
+fct_order_activity_hourly.activity_hour -> orders_cdc_log.source_ts_ms {class: meta}
+fct_pipeline_runs.run_id -> ingest_runs.run_id {class: meta}
+fct_pipeline_runs.batch_id -> ingest_runs.batch_id {class: meta}
+fct_pipeline_runs.run_id -> merge_runs.run_id {class: meta}
