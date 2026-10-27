@@ -4,3 +4,8 @@
 # Compiled Protobuf descriptor set. It has no NUL byte, so Git would guess "text" and rewrite
 # its 0x0a bytes on a CRLF checkout.
 *.desc binary
+
+# Rendered diagrams: keep the bytes D2 writes (no EOL conversion, so make diagrams-check compares
+# exactly what CI renders) and collapse them in PR diffs; review the .d2 source instead.
+*.svg -text
+docs/diagrams/*.svg linguist-generated=true
