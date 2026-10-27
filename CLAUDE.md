@@ -24,6 +24,10 @@ Lake on S3-compatible storage. Public portfolio repo; all data is synthetic.
 - `make demo`: fresh stack, seeded workload, `cdc-demo verify`, two merges, `verify-current`,
   `build-marts`, `verify-marts`; leaves the stack up.
   `make down` removes it with its volumes.
+- `make d2-install` (once), `make diagrams`, `make diagrams-check` (the CI `diagrams` job),
+  `make diagrams-watch NAME=<name>`: D2 v0.9.0 for Linux x86_64. On the owner's Windows machine
+  run them in WSL:
+  `wsl -d Ubuntu -e bash -lc 'cd /mnt/d/dev/Pessoal/cdc-streaming-demo && make diagrams'`.
 
 ## Repo map
 
@@ -46,6 +50,10 @@ Lake on S3-compatible storage. Public portfolio repo; all data is synthetic.
 - `dbt/`: dbt-duckdb project `cdc_demo` (staging views, marts with enforced contracts, tests).
   `dashboard/app.py`: Streamlit app over the DuckDB file.
 - `docs/PLAN.md`: layers, contracts, runtime contract, phases. `docs/DECISIONS.md`: decision log.
+- `docs/diagrams/`: D2 sources (`<name>.d2`) and the rendered `<name>.svg` next to each;
+  `_style.d2` holds the D2 config (ELK, themes, padding) and the element classes, imported by
+  every diagram. Architecture, data flow, the two ERDs and four sequence diagrams, shown in the
+  README.
 
 ## Invariants
 
@@ -77,6 +85,10 @@ Lake on S3-compatible storage. Public portfolio repo; all data is synthetic.
   hadoop-aws package versions are derived from the installed pyspark, so bump them together.
 - Env var names, CLI options and table paths are the contract in `docs/PLAN.md`; change the
   Python side and the compose side together.
+- `docs/diagrams/*.svg` are generated: edit the `.d2`, run `make diagrams` and commit both. CI
+  fails on a stale, missing or orphan SVG. A diagram shows only what the code has; when a
+  service, table, key or flow changes, update its diagram in the same PR. Edit `.d2` files with
+  an editor, not `sed` or a heredoc, which mangle the `\n` escapes in labels.
 
 ## Conventions
 
