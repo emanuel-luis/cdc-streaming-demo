@@ -1,0 +1,32 @@
+# A mutation, part 2: the same update from the CDC log to the marts and the dashboard, as
+# `make demo` and `make dashboard` drive it. Grounded in scripts/demo.sh, src/cdc_demo/verify.py,
+# merge/job.py, verify_current.py, marts.py, verify_marts.py, dashboard/app.py, dbt/models/marts/.
+...@_style
+
+marts: "A mutation, part 2: from the CDC log to the marts" {
+  shape: sequence_diagram
+  style: {font-size: 24; bold: true}
+
+  operator: "Operator\n(make demo)" {class: actor}
+  job: "spark-job" {class: process}
+  pg: "Postgres\npublic.orders" {class: source}
+  lake: "Delta lake" {class: store}
+  analytics: "analytics\n(dbt-duckdb)" {class: process}
+  wh: "analytics\n.duckdb" {class: store}
+  dash: "Streamlit" {class: serving}
+
+  operator -> job: "verify --manifest"
+  job -> lake: "events per op, rejects,\nno duplicate event_id"
+  job -> pg: "row count"
+  operator -> job: "merge"
+  job -> lake: "events above the watermark;\nMERGE order 42 into\ncurrent/orders if newer;\nthen move the watermark"
+  operator -> job: "verify-current"
+  job -> pg: "every order,\ncompared row by row\nwith current/orders"
+  operator -> analytics: "build-marts"
+  analytics -> lake: "delta_scan\nover s3://"
+  analytics -> wh: "dbt build into a\nstaging file, renamed\ninto place when\nevery test passes"
+  operator -> analytics: "verify-marts --manifest"
+  analytics -> wh: "events per op,\nrejects, live orders"
+  operator -> dash: "make dashboard,\nthen reload"
+  dash -> wh: "read-only queries:\norder 42 is shipped,\nthe change is a row of\nfct_order_status_changes"
+}

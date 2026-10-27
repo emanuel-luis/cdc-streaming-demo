@@ -1,0 +1,84 @@
+# The system in context: who runs it, the two CDC paths and the services of compose.yaml.
+# Grounded in compose.yaml, scripts/demo.sh, scripts/mssql-demo.sh, debezium/orders-connector.json,
+# src/cdc_demo/{ingest,merge,mssql}/ and .github/workflows/. Table detail is in data-flow.d2.
+...@_style
+
+title: "Architecture: two ways to capture changes into one Delta lake" {
+  shape: text
+  near: top-center
+  style: {font-size: 24; bold: true}
+}
+
+direction: down
+
+operator: Operator {class: actor}
+actions: "GitHub Actions\nci.yml: make demo on every PR\nmssql.yml: weekly, on demand" {class: external}
+
+debezium: "Debezium path · docker compose (default)" {
+  class: group
+  mutator: "mutator\nseeded inserts, updates,\ndeletes, one transaction each" {class: process}
+  pg: "PostgreSQL 18\npublic.orders\nwal_level=logical" {class: source}
+  connect: "Debezium Connect 3.7\npgoutput, slot cdc_demo_slot,\nProtobuf converter" {class: process}
+  registry: "Schema Registry 8.3\ncdc.public.orders-value" {class: process}
+  kafka: "Kafka · KRaft\ntopic cdc.public.orders" {class: store}
+  consumer: "consumer · Spark 4.2\nStructured Streaming,\nfrom_protobuf, foreachBatch,\nexactly once into Delta" {class: process}
+
+  mutator -> pg
+  pg -> connect: "WAL"
+  connect -> registry: "registers\nthe schema" {class: meta}
+  connect -> kafka
+  kafka -> consumer
+}
+
+mssql: "SQL Server path · profile mssql" {
+  class: group
+  sql: "SQL Server 2022\ndbo.orders, CDC on,\ncapture job (Agent)" {class: source}
+  job: "mssql-job\nmutate --target mssql (same\nseeded changes), verify, merge" {class: process}
+  reader: "mssql-consumer · Spark 4.2\nmssql-cdc-pyspark: snapshot\nat LSN L, then stream; same\ncontract, root s3a://cdc-demo/mssql" {class: process}
+
+  job -> sql
+  sql -> reader: "change table"
+}
+
+lake: "Object store · RustFS (S3) · bucket cdc-demo · Delta Lake 4.4" {
+  class: group
+  log: "raw/orders_cdc_log\nappend-only CDC log,\nrejects, ingest runs" {class: store}
+  merger: "cdc-demo merge\n(spark-job or mssql-job)\nwatermarked MERGE" {class: process}
+  current: "current/orders\none row per live order,\nwatermark, merge runs" {class: store}
+
+  log -> merger
+  merger -> current
+}
+
+serving: "Analytics · volume warehouse" {
+  class: group
+  dbt: "analytics · build-marts\ndbt-duckdb, delta_scan\nover s3://" {class: process}
+  wh: "analytics.duckdb\nstaging views, 4 marts;\nreplaced only when\ndbt build passes" {class: store}
+  dash: "Streamlit dashboard\n:8501, read-only" {class: serving}
+
+  dbt -> wh
+  wh -> dash
+}
+
+debezium.consumer -> lake.log
+mssql.reader -> lake.log
+lake.log -> serving.dbt
+lake.current -> serving.dbt
+
+operator -> debezium.mutator: "make demo"
+operator -> mssql.job: "make mssql-demo"
+operator -> serving.dash: "browser"
+actions -> debezium: "smoke job"
+actions -> mssql: "mssql-demo job"
+
+legend: Legend {
+  class: legend
+  grid-columns: 4
+  actor: actor {class: [actor; legend-actor]}
+  external: external system {class: [external; legend-item]}
+  source: source database {class: [source; legend-item]}
+  process: service or job {class: [process; legend-item]}
+  store: stored data {class: [store; legend-store]}
+  serving: serving {class: [serving; legend-item]}
+  edges: "solid arrow: data or a call\ndashed: metadata or control" {shape: text; style.font-size: 13}
+}
