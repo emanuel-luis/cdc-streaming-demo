@@ -50,6 +50,11 @@ All notable changes to this project are documented here. The format follows
 - Compose profile `mssql` (SQL Server 2022, setup job, consumer, job), `mssql/init/01_setup.sql`,
   `make mssql-demo`, `make lag`, `make stats`, the `mssql` workflow (manual and weekly) and a
   README comparison with the Debezium path. `MSSQL_ACCEPT_EULA` has no default.
+- D2 diagrams in `docs/diagrams/` (architecture, data flow, the lake and marts ERDs, and four
+  sequence diagrams: a mutation in two parts, the merge rerun and the SQL Server path), rendered
+  to committed SVGs that follow GitHub's light and dark mode, with a shared `_style.d2`. Make
+  targets `d2-install`, `diagrams`, `diagrams-check` and `diagrams-watch`, and a CI job
+  `diagrams` that fails on a stale SVG and uploads the rendered ones.
 
 ### Changed
 
@@ -65,6 +70,9 @@ All notable changes to this project are documented here. The format follows
 - `make down` also removes the `mssql` profile. The Spark image installs the `mssql` extra and
   three system libraries; `ingest.writer.append_delta` is now a module-level function.
 - Kafka UI is configured with the registry; the stack's memory budget includes Schema Registry.
+- The README shows the D2 diagrams instead of the inline Mermaid architecture block, and its
+  layer table renders as one table again (a blank line had split off the last two rows).
+- `make help` also lists targets whose names contain digits.
 
 ### Removed
 

@@ -33,39 +33,10 @@
 
 ## Architecture
 
-```mermaid
-flowchart LR
-    subgraph Source
-        MUT[mutator<br/>seeded inserts / updates / deletes] --> PG[(Postgres 18<br/>public.orders)]
-    end
-    subgraph Transport
-        PG -- WAL / pgoutput --> DBZ[Debezium Connect 3.7]
-        DBZ --> KFK[[Kafka 4 KRaft<br/>cdc.public.orders]]
-        DBZ -. register schema .-> SR[Schema Registry 8.3]
-    end
-    subgraph Lake["Lake (S3-compatible storage)"]
-        KFK --> SSS[Spark Structured Streaming<br/>foreachBatch, exactly once]
-        SSS --> RAW[(raw/orders_cdc_log<br/>append-only Delta)]
-        SSS --> REJ[(raw/_rejects)]
-        SSS --> RUNS[(_meta/ingest_runs)]
-        RAW --> MRG[cdc-demo merge<br/>batch, re-runnable]
-        MRG --> CUR[(current/orders<br/>one row per live order)]
-        MRG --> WM[(_meta/merge_watermark<br/>_meta/merge_runs)]
-    end
-    subgraph Serving["Serving (warehouse volume)"]
-        RAW --> DBT[cdc-demo build-marts<br/>dbt build, DuckDB delta_scan]
-        CUR --> DBT
-        RUNS --> DBT
-        WM --> DBT
-        DBT --> WH[(analytics.duckdb<br/>staging views + 4 marts)]
-        WH --> DASH[Streamlit dashboard<br/>read-only]
-    end
-    WH -. verify-marts .-> CHECK3{{cdc-demo verify-marts}}
-    RAW -. verify .-> CHECK{{cdc-demo verify}}
-    PG -. verify .-> CHECK
-    CUR -. verify-current .-> CHECK2{{cdc-demo verify-current}}
-    PG -. verify-current .-> CHECK2
-```
+![Architecture: an operator runs make demo for the Debezium path (mutator, Postgres, Debezium Connect, Schema Registry, Kafka, a Spark consumer) or make mssql-demo for the SQL Server path (SQL Server with CDC on, read by an mssql-cdc-pyspark consumer). Both write the same append-only Delta CDC log on S3-compatible storage; cdc-demo merge keeps the current table, and dbt-duckdb builds the marts that a Streamlit dashboard reads.](docs/diagrams/architecture.svg)
+
+Source: [architecture.d2](docs/diagrams/architecture.d2). The diagrams are D2 sources rendered to SVG;
+see [Development](#development) to change them.
 
 | Layer | Lives in | Contents |
 | --- | --- | --- |
@@ -76,9 +47,24 @@ flowchart LR
 | Run metadata | Delta `s3a://cdc-demo/_meta/ingest_runs` | One row per micro-batch: run id, batch id, counts, offset range |
 | Processed | Delta `s3a://cdc-demo/current/orders` | One row per live order, the latest state; written only by `cdc-demo merge` |
 | Merger control | Delta `s3a://cdc-demo/_meta/merge_watermark`, `_meta/merge_runs` | Last merged Kafka offset per partition; one row per merge run |
-
 | Serving | DuckDB file `analytics.duckdb` in the `warehouse` volume | dbt staging views over the Delta tables and four marts: `dim_orders_current`, `fct_order_status_changes`, `fct_order_activity_hourly`, `fct_pipeline_runs`; written only by `cdc-demo build-marts` |
 | Presentation | Streamlit at <http://localhost:8501> | Reads the DuckDB file read-only |
+
+### Data flow
+
+![Data flow: Postgres changes go through Kafka (checked by check-schema) and SQL Server changes are read directly; the consumers turn them into the raw CDC log, rejects and one run row per batch. cdc-demo merge moves the latest event per order into current/orders and advances the watermark; dbt-duckdb builds staging views and four marts that the dashboard reads. The checks verify, verify-current, the dbt tests and verify-marts sit beside the layer they check.](docs/diagrams/data-flow.svg)
+
+Source: [data-flow.d2](docs/diagrams/data-flow.d2).
+
+### Data model
+
+![Lake tables: raw/orders_cdc_log keyed by event_id, its rejects keyed by Kafka coordinates, _meta/ingest_runs keyed by run and batch, current/orders keyed by order_id and pointing to the event and merge run that set each row, and the merge watermark per Kafka partition.](docs/diagrams/data-model.svg)
+
+Source: [data-model.d2](docs/diagrams/data-model.d2).
+
+![Marts and their keys: dim_orders_current by order_id from current/orders, fct_order_status_changes by event_id and fct_order_activity_hourly by hour and operation from the CDC log, fct_pipeline_runs by component, run and batch from the ingest and merge run tables.](docs/diagrams/data-model-marts.svg)
+
+Source: [data-model-marts.d2](docs/diagrams/data-model-marts.d2).
 
 ## Tech stack
 
@@ -168,6 +154,18 @@ Ports are the defaults; change any of them in `.env` (copy `.env.example`).
 8. **Optional UI.** `make ui` starts Kafka UI at <http://localhost:8090> (topics, decoded messages,
    the schema subjects, the Connect cluster). The Spark UI of the running consumer is at <http://localhost:4040>.
 
+### One change, end to end
+
+The same steps, following one update of one order.
+
+![A mutation, part 1: the mutator updates order 42 in one transaction; Debezium reads the WAL through the replication slot and writes an op u event with before and after images to Kafka; the consumer appends it to the CDC log with an event id built from the Kafka coordinates, then writes the run row. A delete adds a tombstone the consumer skips and counts, and a replayed batch is skipped by Delta.](docs/diagrams/user-flows-mutation-capture.svg)
+
+Source: [user-flows-mutation-capture.d2](docs/diagrams/user-flows-mutation-capture.d2).
+
+![A mutation, part 2: verify checks the CDC log and the Postgres row count against the manifest, merge applies the update to current/orders and moves the watermark, verify-current compares every order with Postgres, build-marts publishes analytics.duckdb only when every dbt test passes, verify-marts checks the marts, and the dashboard shows the change.](docs/diagrams/user-flows-mutation-marts.svg)
+
+Source: [user-flows-mutation-marts.d2](docs/diagrams/user-flows-mutation-marts.d2).
+
 ### Memory budget
 
 Every long-running service has a memory limit in `compose.yaml`, sized for a 16 GB laptop
@@ -230,6 +228,10 @@ How the SQL Server path works:
    and after) and becomes one `u` event; the SQL Server LSN is packed into the `source_lsn`
    BIGINT; `kafka_offset` is a dense counter in the library's order. The mapping table is in
    [docs/PLAN.md](docs/PLAN.md), the reasons in decisions 45 to 55.
+
+![The SQL Server path: make mssql-demo sets up dbo.orders with CDC on; mssql-consumer writes a snapshot at LSN L as op r events, then streams the change table from L, pairing before and after rows into one u event; mssql-job mutates, verifies, merges twice and compares row by row; analytics builds and verifies the marts on the mssql lake root; lag-report measures the lag.](docs/diagrams/user-flows-sqlserver.svg)
+
+Source: [user-flows-sqlserver.d2](docs/diagrams/user-flows-sqlserver.d2).
 
 ### What differs
 
@@ -326,6 +328,10 @@ Notes on the table:
   steps is harmless: the re-run reads the same events and the newer-than guard turns them into
   no-ops. A delete event removes the row; the CDC log keeps the history.
 
+  ![The merge rerun: the first merge reads the watermark, pins the CDC log version, merges the latest event per order and then moves the watermark and writes a run row. A second run finds no events above the watermark and reports inserted 0, updated 0, deleted 0. A rerun after a crash between the MERGE and the watermark reads the same events, changes nothing and then moves the watermark.](docs/diagrams/user-flows-merge-rerun.svg)
+
+  Source: [user-flows-merge-rerun.d2](docs/diagrams/user-flows-merge-rerun.d2).
+
 Every decision and its reason is logged in [docs/DECISIONS.md](docs/DECISIONS.md); the build
 plan is in [docs/PLAN.md](docs/PLAN.md).
 
@@ -344,7 +350,7 @@ dbt/                      dbt-duckdb project: sources, staging views, marts, tes
 dashboard/                Streamlit app over the DuckDB marts
 src/cdc_demo/proto/       the Protobuf contract: .proto and compiled descriptor set
 tests/                    unit and property tests; Spark tests behind the `spark` marker
-docs/                     plan and decision log
+docs/                     plan, decision log, diagrams (D2 sources and rendered SVGs)
 ```
 
 ## Development
@@ -355,6 +361,18 @@ make proto        # recompile the Protobuf descriptor set after editing the .pro
 make lint         # ruff check, ruff format --check, mypy (strict), dbt parse
 make test-fast    # unit and property tests, no JVM
 make test-spark   # Spark tests (Linux, macOS, WSL or CI; needs Java 17)
+```
+
+The diagrams are [D2](https://d2lang.com) sources in `docs/diagrams/`, rendered to the SVGs next
+to them with one pinned D2 version; `_style.d2` holds the shared layout and colors. Edit a
+`.d2`, render, and commit both files: the CI job `diagrams` renders again and fails on any
+difference.
+
+```bash
+make d2-install                          # D2 v0.9.0 for Linux x86_64, sha256 checked
+make diagrams                            # render docs/diagrams/*.d2 to SVG
+make diagrams-check                      # render, then fail if a committed SVG is stale
+make diagrams-watch NAME=architecture    # live preview in the browser while editing
 ```
 
 ## Roadmap
