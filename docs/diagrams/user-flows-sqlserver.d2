@@ -1,0 +1,32 @@
+# The SQL Server path, as `make mssql-demo` drives it: no Debezium, no Kafka. Grounded in
+# scripts/mssql-demo.sh, mssql/init/01_setup.sql, compose.yaml (profile mssql),
+# src/cdc_demo/mssql/{job,writer,mapping,lsn}.py and src/cdc_demo/lag.py.
+...@_style
+
+mssql: "The SQL Server path: make mssql-demo" {
+  shape: sequence_diagram
+  style: {font-size: 24; bold: true}
+
+  operator: Operator {class: actor}
+  sql: "SQL Server 2022\ndbo.orders" {class: source}
+  consumer: "mssql-consumer" {class: process}
+  lake: "Delta lake\n(mssql root)" {class: store}
+  job: "mssql-job" {class: process}
+  analytics: "analytics\n(dbt-duckdb)" {class: process}
+
+  operator -> sql: "MSSQL_ACCEPT_EULA=Y\nmake mssql-demo;\nmssql-init (sqlcmd):\ndatabase, dbo.orders,\n500 rows, CDC on,\nowner and reader logins"
+  consumer -> sql: "snapshot at LSN L\n(mssql_cdc_snapshot)"
+  consumer -> lake: "500 op r events,\napp id <app>#snapshot;\nlogs snapshot_written"
+  operator -> job: "mutate --target mssql\n--count 200 --seed 42"
+  job -> sql: "the same seeded changes,\none transaction each"
+  sql -> sql: "capture job (Agent)\nfills cdc.dbo_orders_CT"
+  consumer -> sql: "mssql_cdc stream\nfrom startingLsn = L"
+  consumer -> lake: "per batch: before (3) and\nafter (4) rows become one u;\nLSN packed into source_lsn;\ndense kafka_offset; rejects:\nunpaired_update,\nlsn_out_of_range"
+  operator -> job: "verify --source mssql;\nmerge twice;\nverify-current --source mssql"
+  job -> lake: "the same merger\nand checks as the\nDebezium path"
+  job -> sql: "row count, then\nevery order row by row"
+  operator -> analytics: "build-marts with\nLAKE_ROOT=s3a://cdc-demo/mssql,\nverify-marts"
+  analytics -> lake: "delta_scan over s3://"
+  operator -> job: "lag-report"
+  job -> lake: "finished_at minus\nsource_ts_ms for\nc, u, d: p50,\np95, max"
+}
