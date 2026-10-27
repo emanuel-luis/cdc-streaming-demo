@@ -10,7 +10,7 @@ title: "Data model: the marts and the lake keys they come from" {
   style: {font-size: 24; bold: true}
 }
 
-note: "Left: schema marts in analytics.duckdb, contracts enforced. Right: the Delta tables, keys only.\nPK: the key the dbt unique and unique-combination tests check. Dashed arrow: the column a\nmart row is built from; no foreign key is enforced. Every mart column is listed in _marts.yml." {
+note: "Left: schema marts in analytics.duckdb, contracts enforced. Right: the Delta tables, their keys\nand the columns a mart is built from. PK: the key the dbt unique and unique-combination tests check. Dashed arrow: the column a\nmart row is built from; no foreign key is enforced. Every mart column is listed in _marts.yml." {
   shape: text
   near: bottom-center
   style.font-size: 14

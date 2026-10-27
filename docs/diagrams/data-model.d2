@@ -47,7 +47,7 @@ rejects: "raw/_rejects/orders_cdc_log" {
   kafka_partition: int {constraint: primary_key}
   kafka_offset: bigint {constraint: primary_key}
   reason: string
-  raw_value: "string (base64)"
+  raw_value: "string (base64 or JSON)"
   ingest_batch_id: bigint
 }
 

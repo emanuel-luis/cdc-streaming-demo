@@ -21,7 +21,7 @@ mssql: "The SQL Server path: make mssql-demo" {
   job -> sql: "the same seeded changes,\none transaction each"
   sql -> sql: "capture job (Agent)\nfills cdc.dbo_orders_CT"
   consumer -> sql: "mssql_cdc stream\nfrom startingLsn = L"
-  consumer -> lake: "per batch: before (3) and\nafter (4) rows become one u;\nLSN packed into source_lsn;\ndense kafka_offset; rejects:\nunpaired_update,\nlsn_out_of_range"
+  consumer -> lake: "per batch: before (3) and\nafter (4) rows become one u;\nLSN packed into source_lsn;\ndense kafka_offset; rejects\nwith a reason, e.g.\nunpaired_update"
   operator -> job: "verify --source mssql;\nmerge twice;\nverify-current --source mssql"
   job -> lake: "the same merger\nand checks as the\nDebezium path"
   job -> sql: "row count, then\nevery order row by row"
