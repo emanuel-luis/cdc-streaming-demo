@@ -1,0 +1,40 @@
+# The merger run twice, as `make demo` does, and a rerun after a crash between the MERGE and the
+# watermark. Grounded in src/cdc_demo/merge/job.py (run_merge, _incremental, _merge,
+# _advance_watermark, _finish), scripts/demo.sh and README "The current table and its watermark".
+...@_style
+
+rerun: "The merge rerun that changes nothing" {
+  shape: sequence_diagram
+  style: {font-size: 24; bold: true}
+
+  operator: "Operator\n(make demo)" {class: actor}
+  merge: "cdc-demo merge\n(spark-job)" {class: process}
+  wm: "_meta/\nmerge_watermark" {class: store}
+  log: "raw/\norders_cdc_log" {class: store}
+  current: "current/orders" {class: store}
+  runs: "_meta/\nmerge_runs" {class: store}
+
+  operator -> merge: "merge"
+  merge -> wm: "last offset per partition"
+  merge -> log: "pin the latest version v,\nread once (versionAsOf):\nevents above the watermark"
+  merge -> current: "MERGE the latest event per order\nby (source_lsn, kafka_offset):\ninsert, update if newer,\ndelete on op d"
+  merge -> wm: "after the MERGE commits:\nhighest offset read"
+  merge -> runs: "row: version v, events read,\ninserted, updated, deleted"
+
+  second: "Second run, no new events" {
+    operator -> merge: "merge"
+    merge -> wm: "the moved watermark"
+    merge -> log: "pin the latest version:\n0 events above it"
+    merge -> runs: "row: events read 0, inserted 0,\nupdated 0, deleted 0;\nno MERGE, watermark untouched"
+    merge -> operator: "demo.sh checks for\n\"inserted 0, updated 0, deleted 0\"" {class: meta}
+  }
+
+  crash: "Rerun after a crash between the MERGE and the watermark" {
+    operator -> merge: "merge"
+    merge -> wm: "the old watermark"
+    merge -> log: "the same events again"
+    merge -> current: "MERGE: no event is newer than\nthe stored row, nothing changes"
+    merge -> wm: "now moves"
+    merge -> runs: "row: inserted 0, updated 0,\ndeleted 0"
+  }
+}

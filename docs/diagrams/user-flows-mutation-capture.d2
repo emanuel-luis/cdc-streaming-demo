@@ -1,0 +1,38 @@
+# A mutation, part 1: one update travels the Debezium path into the CDC log, as `make demo`
+# drives it. Grounded in scripts/demo.sh, src/cdc_demo/mutator/, debezium/orders-connector.json,
+# src/cdc_demo/ingest/{parse,writer}.py and README "Exactly once into Delta".
+...@_style
+
+capture: "A mutation, part 1: from Postgres into the CDC log" {
+  shape: sequence_diagram
+  style: {font-size: 24; bold: true}
+
+  operator: "Operator\n(make demo)" {class: actor}
+  mutator: mutator {class: process}
+  pg: "Postgres\npublic.orders" {class: source}
+  connect: "Debezium\nConnect" {class: process}
+  kafka: "Kafka\ncdc.public.orders" {class: store}
+  consumer: "consumer\n(Spark)" {class: process}
+  lake: "Delta lake" {class: store}
+
+  operator -> mutator: "mutate --count 200\n--seed 42"
+  mutator -> pg: "e.g. order 42:\nconfirmed to shipped,\none transaction"
+  mutator -> operator: "manifest:\nchanges per op" {class: meta}
+  pg -> connect: "WAL via slot\ncdc_demo_slot,\nfull before image"
+  connect -> kafka: "op u, before and\nafter, Protobuf,\nkey id = 42"
+  consumer -> kafka: "micro-batch\nevery 10 s"
+  kafka -> consumer: "records with\npartition, offset" {class: meta}
+  consumer -> lake: "append to orders_cdc_log:\nevent_id = topic-\npartition-offset,\ntxnVersion = batch id"
+  consumer -> lake: "then the\ningest_runs row"
+
+  delete: "A delete" {
+    mutator -> pg: "DELETE one order"
+    connect -> kafka: "op d with the\nbefore image,\nthen a tombstone"
+    consumer -> lake: "the d event; the\ntombstone is skipped\nand counted"
+  }
+
+  replay: "Crash after the write, before the checkpoint" {
+    consumer -> kafka: "replay the batch,\nsame batch id"
+    consumer -> lake: "same txnAppId,\ntxnVersion: Delta\nskips the write"
+  }
+}

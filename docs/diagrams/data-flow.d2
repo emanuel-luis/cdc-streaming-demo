@@ -1,0 +1,89 @@
+# Layers from the source table to the marts, and where the contract, the checks, the run metadata
+# and the merge watermark sit. Grounded in src/cdc_demo/{ingest,merge,mssql}/, contract.py,
+# verify.py, verify_current.py, verify_marts.py, marts.py, dbt/models/** and dbt/tests/.
+...@_style
+
+title: "Data flow: a change from the source table to the marts" {
+  shape: text
+  near: top-center
+  style: {font-size: 24; bold: true}
+}
+
+direction: down
+
+pg: "Postgres public.orders\nDebezium path" {class: source}
+sql: "SQL Server dbo.orders\nprofile mssql; change table\nread directly, no Kafka" {class: source}
+
+transport: "Transport · Kafka" {
+  class: group
+  topic: "cdc.public.orders\nProtobuf, Confluent\nwire format; key id;\ntombstone after a delete" {class: store}
+  schema: "check-schema\nchecked-in .proto equals the\nlatest registered schema" {class: check}
+}
+
+ingest: "Ingest · one foreachBatch per micro-batch" {
+  class: group
+  parse: "consumer\nheader check, from_protobuf,\ncast to the contract,\ntombstones skipped and counted" {class: process}
+  contract: "contract on raw\nbad events become rejects\nwith a reason" {class: check}
+  map: "mssql-consumer\nsnapshot at LSN L,\nthen the change stream;\nbefore/after rows paired,\nLSN packed into source_lsn" {class: process}
+}
+
+raw: "Raw and run metadata · Delta, each write keyed by (txnAppId, batch id)" {
+  class: group
+  log: "raw/orders_cdc_log\nappend-only, one row per event,\nevent_id = topic-partition-offset" {class: store}
+  rejects: "raw/_rejects/orders_cdc_log\nreason, raw value,\nKafka coordinates" {class: store}
+  runs: "_meta/ingest_runs\none row per batch, written\nlast: counts, offset range" {class: store}
+}
+
+processed: "Processed · cdc-demo merge, batch and re-runnable" {
+  class: group
+  merge: "read the log once at a\npinned version; events above\nthe watermark; latest per\norder by (source_lsn,\nkafka_offset)" {class: process}
+  current: "current/orders\none row per live order;\nMERGE updates a row only\nwhen the event is newer" {class: store}
+  control: "_meta/merge_watermark\nlast offset per partition,\nmoved after the MERGE\ncommits; _meta/merge_runs" {class: store}
+  verify_current: "verify-current\ncurrent table equals\nthe source, row by row" {class: check}
+
+  merge -> current
+  merge -> control
+  merge -> verify_current {class: layer}
+}
+
+serving: "Serving · cdc-demo build-marts, dbt-duckdb" {
+  class: group
+  staging: "staging · 6 views\none per Delta table,\ndelta_scan over s3://" {class: process}
+  staging_tests: "tests on staging\nunique keys; current = latest\nevent per order up to the\nwatermark; rejects = run counts" {class: check}
+  marts: "marts · 4 tables\nenforced contracts; built in a\nstaging file, renamed to\nanalytics.duckdb when all pass" {class: store}
+  marts_tests: "tests on marts\nunique keys, accepted values" {class: check}
+  verify_marts: "verify-marts\nevents per op, rejects and live\norders match the manifest" {class: check}
+  dash: "Streamlit dashboard\nread-only" {class: serving}
+
+  staging -> marts
+  staging -> marts_tests {class: layer}
+  marts -> dash
+  marts -> verify_marts {class: meta}
+}
+
+pg -> transport.topic: "Debezium, WAL"
+pg -> transport.schema {class: layer}
+transport.topic -> ingest.parse
+transport.topic -> ingest.contract {class: layer}
+sql -> ingest.map
+ingest.parse -> raw: "valid events, rejects,\nthen the run row"
+ingest.map -> raw
+
+verify: "verify (on raw)\nevents per op and rejects match\nthe mutator manifest, no duplicate\nevent_id, source row count" {class: check}
+ingest.map -> verify {class: layer}
+
+raw.log -> processed.merge
+raw -> serving.staging
+processed -> serving.staging
+raw -> serving.staging_tests {class: layer}
+
+legend: Legend {
+  class: legend
+  grid-columns: 3
+  source: source table {class: [source; legend-item]}
+  process: process or view {class: [process; legend-item]}
+  store: stored data or table {class: [store; legend-store]}
+  check: contract or check {class: [check; legend-item]}
+  serving: serving {class: [serving; legend-item]}
+  edges: "solid arrow: data\ndashed: a check's input" {shape: text; style.font-size: 13}
+}
