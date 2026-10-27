@@ -1,0 +1,99 @@
+# The Delta tables of the lake and their keys: the CDC log, its rejects and run rows, the current
+# table and the merger's control tables. Columns from src/cdc_demo/ingest/schemas.py and
+# src/cdc_demo/merge/schemas.py; keys follow the unique, not_null and unique_combination tests in
+# dbt/models/staging/_staging.yml and the invariants in CLAUDE.md. No relationships test exists,
+# so the arrows are references drawn dashed. The marts are in data-model-marts.d2.
+...@_style
+
+title: "Data model: the CDC log, the current table and run metadata" {
+  shape: text
+  near: top-center
+  style: {font-size: 24; bold: true}
+}
+
+note: "Delta tables under s3a://cdc-demo (the SQL Server path writes the same tables under s3a://cdc-demo/mssql).\nPK: the key the dbt unique and unique-combination tests check. Dashed arrow: the column a row refers to;\nno foreign key is enforced. Selected columns; the full lists are in the schema modules." {
+  shape: text
+  near: bottom-center
+  style.font-size: 14
+}
+
+direction: right
+
+current_orders: "current/orders" {
+  shape: sql_table
+  order_id: bigint {constraint: primary_key}
+  customer_id: int
+  status: string
+  amount: "decimal(12,2)"
+  _source_lsn: bigint
+  _kafka_offset: bigint
+  _event_id: string
+  _op: string
+  _merge_run_id: string
+  _merged_at: timestamp
+}
+
+merge_watermark: "_meta/merge_watermark" {
+  shape: sql_table
+  kafka_topic: string {constraint: primary_key}
+  kafka_partition: int {constraint: primary_key}
+  last_offset: bigint
+  run_id: string
+}
+
+rejects: "raw/_rejects/orders_cdc_log" {
+  shape: sql_table
+  kafka_topic: string {constraint: primary_key}
+  kafka_partition: int {constraint: primary_key}
+  kafka_offset: bigint {constraint: primary_key}
+  reason: string
+  raw_value: "string (base64)"
+  ingest_batch_id: bigint
+}
+
+orders_cdc_log: "raw/orders_cdc_log (append-only)" {
+  shape: sql_table
+  event_id: string {constraint: primary_key}
+  op: "string (r, c, u, d)"
+  order_id: bigint
+  status: string
+  before_status: string
+  amount: "decimal(12,2)"
+  source_ts_ms: bigint
+  source_lsn: bigint
+  kafka_topic: string
+  kafka_partition: int
+  kafka_offset: bigint
+  ingest_batch_id: bigint
+  _partition_date: "date (partition)"
+}
+
+merge_runs: "_meta/merge_runs" {
+  shape: sql_table
+  run_id: string {constraint: primary_key}
+  cdc_log_version: bigint
+  events_read: bigint
+  rows_inserted: bigint
+  rows_updated: bigint
+  rows_deleted: bigint
+  watermark_before: "string (JSON)"
+  watermark_after: "string (JSON)"
+}
+
+ingest_runs: "_meta/ingest_runs" {
+  shape: sql_table
+  run_id: string {constraint: primary_key}
+  batch_id: bigint {constraint: primary_key}
+  input_rows: bigint
+  valid_rows: bigint
+  rejected_rows: bigint
+  tombstones: bigint
+  min_offset: bigint
+  max_offset: bigint
+}
+
+current_orders._event_id -> orders_cdc_log.event_id {class: meta}
+current_orders._merge_run_id -> merge_runs.run_id {class: meta}
+merge_watermark.last_offset -> orders_cdc_log.kafka_offset {class: meta}
+rejects.ingest_batch_id -> ingest_runs.batch_id {class: meta}
+orders_cdc_log.ingest_batch_id -> ingest_runs.batch_id {class: meta}
