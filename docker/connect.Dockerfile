@@ -5,7 +5,7 @@
 
 ARG PROTOBUF_CONVERTER_VERSION=8.3.2
 
-FROM python:3.12.15-slim-bookworm AS protobuf-converter
+FROM python:3.12.16-slim-bookworm AS protobuf-converter
 ARG PROTOBUF_CONVERTER_VERSION
 ADD --checksum=sha256:5617917614455c6af7f28bbf001daf0b24e1d2f24141ff9183db89540450cb4b \
     https://hub-downloads.confluent.io/api/plugins/confluentinc/kafka-connect-protobuf-converter/versions/${PROTOBUF_CONVERTER_VERSION}/confluentinc-kafka-connect-protobuf-converter-${PROTOBUF_CONVERTER_VERSION}.zip \
