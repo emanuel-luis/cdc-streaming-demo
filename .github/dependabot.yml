@@ -1,21 +1,36 @@
+# Monthly update PRs, one group per ecosystem for minor and patch. Semver-major version updates
+# are ignored (majors move by hand) and a release waits 7 days before it is proposed. Security
+# updates skip the schedule and the cooldown. .github/workflows/dependabot-auto-merge.yml merges
+# these PRs once CI is green.
 version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
+    cooldown:
+      default-days: 7
     groups:
       github-actions:
         patterns: ["*"]
+        update-types: ["minor", "patch"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: uv
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
+    cooldown:
+      default-days: 7
     groups:
       python:
         patterns: ["*"]
+        update-types: ["minor", "patch"]
     ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
       # dbt-common needs protobuf<7, which caps grpcio-tools below 1.83 (decision 35).
       - dependency-name: grpcio-tools
         versions: [">=1.83"]
@@ -32,11 +47,16 @@ updates:
   - package-ecosystem: docker
     directory: /docker
     schedule:
-      interval: weekly
+      interval: monthly
+    cooldown:
+      default-days: 7
     groups:
       docker:
         patterns: ["*"]
+        update-types: ["minor", "patch"]
     ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
       # The apps run on Python 3.12 and Spark 4.2 on Java 17 (LTS); only patch releases are
       # automatic. Moving either line is a deliberate change, tested by hand.
       - dependency-name: python
@@ -47,11 +67,16 @@ updates:
   - package-ecosystem: docker-compose
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
+    cooldown:
+      default-days: 7
     groups:
       docker-compose:
         patterns: ["*"]
+        update-types: ["minor", "patch"]
     ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
       # A Postgres major upgrade needs a dump and restore or fresh volumes.
       - dependency-name: postgres
         update-types: ["version-update:semver-major"]
