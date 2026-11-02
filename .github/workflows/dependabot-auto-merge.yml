@@ -1,5 +1,5 @@
 # Merges Dependabot minor and patch updates, and same-tag Docker digest refreshes, without a
-# human, and never before CI is green. Majors are ignored in .github/dependabot.yml; any other
+# human, and never before CI is green. Pre-releases always wait for a human. Majors are ignored in .github/dependabot.yml; any other
 # Dependabot PR (a major security fix, a manual edit) is left for a human.
 #
 # Merge mode: PROTECTED. main has branch protection with the CI jobs as required checks, so
@@ -45,6 +45,7 @@ jobs:
           UPDATE_TYPE: ${{ steps.metadata.outputs.update-type }}
           ECOSYSTEM: ${{ steps.metadata.outputs.package-ecosystem }}
           PR_TITLE: ${{ github.event.pull_request.title }}
+          UPDATED_JSON: ${{ steps.metadata.outputs.updated-dependencies-json }}
         run: |
           set -euo pipefail
           # A digest refresh keeps the image tag and only swaps the rebuilt image, so it has no
@@ -60,7 +61,13 @@ jobs:
                 eligible=true
               fi ;;
           esac
-          echo "update-type='$UPDATE_TYPE' ecosystem='$ECOSYSTEM' eligible=$eligible"
+          # A security update takes the first fixed version, which can be a pre-release (Twisted
+          # 26.10.0rc1 in ecommerce-scraping); a pre-release always waits for a human.
+          prerelease=$(jq '[.[].newVersion // "" | select(test("^v?[0-9][0-9.]*(a|b|rc|[.]?dev|[.]?pre)[0-9]*$|^v?[0-9]+[.][0-9]+[.][0-9]+-(alpha|beta|rc|pre|next|canary|dev)"; "i"))] | length > 0' <<<"$UPDATED_JSON" 2>/dev/null || echo unknown)
+          if [[ "$prerelease" != "false" ]]; then
+            eligible=false
+          fi
+          echo "update-type='$UPDATE_TYPE' ecosystem='$ECOSYSTEM' prerelease=$prerelease eligible=$eligible"
           echo "eligible=$eligible" >> "$GITHUB_OUTPUT"
 
       - name: Enable auto-merge (GitHub merges once the required checks pass)
